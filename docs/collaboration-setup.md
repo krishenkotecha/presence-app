@@ -1,18 +1,24 @@
-# Presence Collaboration Setup
+# Presence collaboration setup
 
-This project is now structured so the iOS prototype and backend can move in parallel.
+This is set up now so the iOS app and the backend can move in parallel without tripping over each other.
 
-## Current state
+## current state
 
 - Frontend app: SwiftUI iPhone prototype
 - Product track: v2 relationship-focused flow
 - Speech capture: live on-device microphone + transcription
-- Backend handoff: documented in `docs/v2-backend-contract.md`
+- Backend handoff: in `docs/v2-backend-contract.md`
 - Upload path: frontend packages the conversation audio plus both partners' success definitions
+- Longitudinal page: frontend now also calls a dedicated `What should we work on?` backend surface
 
-## What the frontend needs from the backend
+## what the frontend needs from the backend
 
-At minimum, the backend should expose one analyze endpoint that accepts:
+At minimum, the backend should expose:
+
+- one analyze endpoint for a single conversation review
+- one longitudinal endpoint for `What should we work on?`
+
+The analyze endpoint takes:
 
 - the conversation audio file
 - `participant_one_success_definition`
@@ -24,25 +30,34 @@ The recommended request and response shapes are documented here:
 
 - `docs/v2-backend-contract.md`
 
-## Current app behavior
+There are now two contract surfaces to support:
 
-The app already builds the submission payload and is ready to send it.
+- per-conversation review analysis
+- longitudinal relationship coaching for `What should we work on?`
+
+## current app behavior
+
+The app already builds the conversation submission payload and is ready to send it.
 
 Right now, if no backend URL is configured, the app falls back to local demo analysis so the flow stays testable.
 
-## To connect a shared repo
+That fallback now applies to both:
 
-1. Create a GitHub repo, for example `presence-ios`.
-2. From this project root:
+- the review page
+- the `What should we work on?` page
+
+## repo
+
+The repo is already connected now, so this part is mostly historical. But from the project root the commands are still:
 
 ```bash
 git remote add origin <your-repo-url>
 git push -u origin main
 ```
 
-3. Your cofounder can then clone it and work against the contract doc.
+Your codeveloper can clone it and work directly against the contract doc.
 
-## Suggested collaboration split
+## suggested split
 
 ### Frontend
 
@@ -50,6 +65,7 @@ git push -u origin main
 - record conversation audio
 - upload packaged session to backend
 - render returned analysis
+- call the longitudinal relationship endpoint
 - handle loading / retry / error states
 
 ### Backend
@@ -58,7 +74,8 @@ git push -u origin main
 - store audio if needed
 - run transcription / analysis pipeline
 - return structured response matching `v2-backend-contract.md`
+- return a second aggregated relationship response for longitudinal coaching
 
-## One thing to configure next
+## next thing to configure
 
-The frontend still needs the real backend URL filled into the app config once your cofounder has the endpoint ready.
+The frontend still needs the real backend URLs filled into the app config once your cofounder has the endpoints ready.

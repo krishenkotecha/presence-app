@@ -1,13 +1,13 @@
-# Presence v2 Starter
+# Presence v2 starter
 
 This repo now includes a separate v2 starter shell so we can explore a simpler version of the product without tearing apart the existing v1 prototype.
 
-## Where it lives
+## where it lives
 
 - App switch: `/Users/krishen/Documents/Playground/presence/Sources/PresenceApp.swift`
 - v2 shell: `/Users/krishen/Documents/Playground/presence/Sources/V2/PresenceV2StarterRootView.swift`
 
-## Current behavior
+## current behavior
 
 The app is currently pointed at `v2Starter`.
 
@@ -17,7 +17,7 @@ To switch back to the original prototype:
 private let activeTrack: PrototypeTrack = .v1
 ```
 
-## Why this exists
+## why this exists
 
 The first prototype became a fairly complete communication-mirror product. For v2, we wanted:
 
@@ -25,7 +25,7 @@ The first prototype became a fairly complete communication-mirror product. For v
 - a way to rethink the core loop
 - a safe way to preserve v1 while building something narrower
 
-## What’s scaffolded now
+## what’s scaffolded now
 
 - relationship-only v2 home
 - two actions total:
@@ -33,18 +33,60 @@ The first prototype became a fairly complete communication-mirror product. For v
   - `What should we work on?`
 - two-partner spoken success-definition step
 - real microphone + speech transcription in setup and listening
-- results page shaped around relationship-specific insight
+- review page shaped around relationship-specific insight
 
-## Backend handoff
+## current product focus
 
-The current frontend/backend contract draft lives here:
+The next major areas of work are:
+
+- the review page for a single conversation
+- the longitudinal `What should we work on?` page
+
+That maps to two very different user loops:
+
+- `we're about to talk, let's start a conversation`
+- `let's step back and look at what our patterns have been lately`
+
+The review page should:
+
+- borrow some structural ideas from v1
+- stay emotionally simple and relationship-first
+- show quoted turning points from the conversation
+- connect the analysis back to both partners' stated definition of success
+
+Reference:
+
+- `/Users/krishen/Documents/Playground/presence/docs/v2-review-page.md`
+
+The `What should we work on?` page should:
+
+- focus on relationship-level patterns over time
+- surface one main area worth working on now
+- support that recommendation with longitudinal signals
+- show what is improving so the product does not feel punitive
+
+Backend reference:
 
 - `/Users/krishen/Documents/Playground/presence/docs/v2-backend-contract.md`
 
-## Best next step
+## backend handoff
+
+The current frontend/backend contract lives here:
+
+- `/Users/krishen/Documents/Playground/presence/docs/v2-backend-contract.md`
+
+The current frontend already supports:
+
+- a review endpoint for one recorded conversation
+- a longitudinal endpoint for `What should we work on?`
+
+Until those URLs are configured, both screens fall back to local demo data.
+
+## best next step
 
 Wire the frontend upload flow against the backend contract:
 
 1. package conversation audio + both spoken success definitions
 2. send to backend
-3. render backend results on the existing insight page
+3. render backend results on the review page
+4. add a backend-powered longitudinal response for `What should we work on?`

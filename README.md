@@ -40,7 +40,18 @@ The app is currently pointed at the v2 starter so we can begin shaping the next 
 Current v2 backend contract:
 
 - [v2-backend-contract.md](/Users/krishen/Documents/Playground/presence/docs/v2-backend-contract.md)
+- [v2-review-page.md](/Users/krishen/Documents/Playground/presence/docs/v2-review-page.md)
 - [collaboration-setup.md](/Users/krishen/Documents/Playground/presence/docs/collaboration-setup.md)
+
+The current v2 product now has two output surfaces:
+
+- a per-conversation review page
+- a longitudinal `What should we work on?` page
+
+It also has two user loops:
+
+- a conversation loop: start a conversation, define success, listen, review
+- a longitudinal loop: come back later, review your patterns, and see what to work on
 
 ## Workflow Setup
 

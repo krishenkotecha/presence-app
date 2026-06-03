@@ -48,6 +48,7 @@ private struct PresenceV2SuccessCapture {
 
 private enum PresenceV2BackendConfig {
     static let analyzeURLString = ""
+    static let workOnURLString = ""
 }
 
 private struct PresenceV2HomeView: View {
@@ -924,6 +925,9 @@ private struct PresenceV2InsightView: View {
 
 private struct PresenceV2WorkOnView: View {
     @EnvironmentObject private var themeStore: ThemeStore
+    @State private var insight = PresenceV2WorkOnResponse.mock
+    @State private var isLoading = true
+    @State private var errorMessage: String?
 
     private var theme: PresenceTheme {
         themeStore.current
@@ -931,31 +935,41 @@ private struct PresenceV2WorkOnView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("What should we work on?")
                         .font(.system(size: 30, weight: .bold, design: theme.displayDesign))
                         .foregroundStyle(theme.primaryText)
 
-                    Text("Presence looks for the couple habits that seem to matter most across repeated conversations.")
+                    Text("Presence looks across repeated conversations and shows you what tends to matter most between the two of you.")
                         .font(.system(.subheadline, design: theme.bodyDesign))
                         .foregroundStyle(theme.secondaryText)
                 }
 
-                workOnItem(
-                    title: "Stay with emotion before solving",
-                    detail: "You both become more productive when one of you names the feeling underneath the logistics before trying to fix the issue."
-                )
+                if isLoading {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .tint(theme.accentSuccess)
 
-                workOnItem(
-                    title: "Notice the first defensive turn",
-                    detail: "Conflict starts getting sharper once either of you shifts into explanation instead of reflection."
-                )
+                        Text("Looking across your recent conversations…")
+                            .font(.system(.subheadline, design: theme.bodyDesign))
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                    .padding(.vertical, 4)
+                }
 
-                workOnItem(
-                    title: "Define success together earlier",
-                    detail: "Your warmest conversations start with a shared sense of what a good outcome looks like before the hard part begins."
-                )
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(.footnote, design: theme.bodyDesign))
+                        .foregroundStyle(theme.accentWarm)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                heroRecommendation
+                whyThisMattersSection
+                patternsSection
+                improvingSection
+                workOnListSection
             }
             .padding(20)
         }
@@ -963,25 +977,283 @@ private struct PresenceV2WorkOnView: View {
         .navigationTitle("Work on")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .task {
+            guard isLoading else { return }
+            let result = await PresenceV2BackendClient.shared.fetchWorkOn()
+            switch result {
+            case .success(let response):
+                insight = response
+            case .failure:
+                errorMessage = "Backend not configured yet, so Presence is showing local relationship patterns for now."
+                insight = .mock
+            }
+            isLoading = false
+        }
     }
 
-    private func workOnItem(title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(.headline, design: theme.bodyDesign))
+    private var heroRecommendation: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Most worth working on now")
+                .font(.system(.caption, design: theme.bodyDesign).weight(.bold))
+                .foregroundStyle(theme.accentSuccess)
+                .textCase(.uppercase)
+                .tracking(0.7)
+
+            Text(insight.primaryFocus.title)
+                .font(.system(size: 28, weight: .bold, design: theme.displayDesign))
                 .foregroundStyle(theme.primaryText)
 
-            Text(detail)
-                .font(.system(.subheadline, design: theme.bodyDesign))
+            Text(insight.primaryFocus.summary)
+                .font(.system(.body, design: theme.bodyDesign))
                 .foregroundStyle(theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                statPill(title: insight.primaryFocus.frequencyLabel, tint: theme.accentSuccess.opacity(0.14), textColor: theme.accentStrong)
+                statPill(title: insight.primaryFocus.contextLabel, tint: theme.chipBackground.opacity(0.95), textColor: theme.primaryText)
+            }
         }
-        .padding(18)
-        .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(22)
+        .background(Color.white.opacity(0.84), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(theme.border.opacity(0.9), lineWidth: 1)
+        )
+    }
+
+    private var whyThisMattersSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Why this matters")
+
+            VStack(spacing: 10) {
+                ForEach(insight.whyThisMatters) { item in
+                    insightRow(title: item.title, detail: item.detail, accent: .neutral)
+                }
+            }
+        }
+    }
+
+    private var patternsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Patterns between you")
+
+            VStack(spacing: 10) {
+                ForEach(insight.relationshipPatterns) { pattern in
+                    insightRow(title: pattern.title, detail: pattern.detail, accent: .positive)
+                }
+            }
+        }
+    }
+
+    private var improvingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("What’s improving")
+
+            VStack(spacing: 10) {
+                ForEach(insight.improving) { item in
+                    insightRow(title: item.title, detail: item.detail, accent: .positive)
+                }
+            }
+        }
+    }
+
+    private var workOnListSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("A few things to work on")
+
+            VStack(spacing: 10) {
+                ForEach(insight.workOnAreas) { item in
+                    insightRow(title: item.title, detail: item.detail, accent: .watch)
+                }
+            }
+        }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(.headline, design: theme.bodyDesign))
+            .foregroundStyle(theme.primaryText)
+    }
+
+    private func statPill(title: String, tint: Color, textColor: Color) -> some View {
+        Text(title)
+            .font(.system(.footnote, design: theme.bodyDesign).weight(.semibold))
+            .foregroundStyle(textColor)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(tint, in: Capsule())
+    }
+
+    private func insightRow(title: String, detail: String, accent: WorkOnAccent) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Circle()
+                    .fill(accent.color(for: theme))
+                    .frame(width: 9, height: 9)
+                    .padding(.top, 6)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(title)
+                        .font(.system(.headline, design: theme.bodyDesign))
+                        .foregroundStyle(theme.primaryText)
+
+                    Text(detail)
+                        .font(.system(.subheadline, design: theme.bodyDesign))
+                        .foregroundStyle(theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(theme.border.opacity(0.84), lineWidth: 1)
         )
+    }
+
+    private enum WorkOnAccent {
+        case neutral
+        case positive
+        case watch
+
+        func color(for theme: PresenceTheme) -> Color {
+            switch self {
+            case .neutral:
+                return theme.accentStrong.opacity(0.7)
+            case .positive:
+                return theme.accentSuccess
+            case .watch:
+                return theme.accentWarm
+            }
+        }
+    }
+}
+
+private struct PresenceV2WorkOnResponse: Decodable {
+    struct PrimaryFocus: Decodable {
+        let title: String
+        let summary: String
+        let frequencyLabel: String
+        let contextLabel: String
+
+        enum CodingKeys: String, CodingKey {
+            case title
+            case summary
+            case frequencyLabel = "frequency_label"
+            case contextLabel = "context_label"
+        }
+    }
+
+    struct InsightItem: Decodable, Identifiable {
+        let id = UUID()
+        let title: String
+        let detail: String
+    }
+
+    let relationshipID: String?
+    let timeWindow: String?
+    let primaryFocus: PrimaryFocus
+    let whyThisMatters: [InsightItem]
+    let relationshipPatterns: [InsightItem]
+    let improving: [InsightItem]
+    let workOnAreas: [InsightItem]
+
+    enum CodingKeys: String, CodingKey {
+        case relationshipID = "relationship_id"
+        case timeWindow = "time_window"
+        case primaryFocus = "primary_focus"
+        case whyThisMatters = "why_this_matters"
+        case relationshipPatterns = "relationship_patterns"
+        case improving
+        case workOnAreas = "work_on_areas"
+    }
+
+    static let mock = PresenceV2WorkOnResponse(
+        relationshipID: nil,
+        timeWindow: "90d",
+        primaryFocus: .init(
+            title: "Stay with the feeling before moving into solutions.",
+            summary: "The two of you tend to reconnect when the emotional part lands first. When one of you starts fixing too early, the conversation becomes more procedural and less connected.",
+            frequencyLabel: "6 of your last 10 conversations",
+            contextLabel: "Especially true in money and planning"
+        ),
+        whyThisMatters: [
+            .init(
+                title: "Connection is stronger when you slow down first",
+                detail: "When feelings are named before logistics, your connection score is about 14 points higher than usual."
+            ),
+            .init(
+                title: "This pattern shows up in harder conversations",
+                detail: "It appears most often in discussions about money, planning, and chores, especially when you are both already tired."
+            ),
+            .init(
+                title: "The first defensive turn predicts the rest",
+                detail: "Once either of you starts explaining intent instead of reflecting impact, interruptions rise and the conversation gets more transactional."
+            )
+        ],
+        relationshipPatterns: [
+            .init(
+                title: "One of you tends to want reassurance while the other wants clarity",
+                detail: "The most productive conversations happen when both needs are made visible early instead of competing under the surface."
+            ),
+            .init(
+                title: "Money conversations become more efficient and less curious",
+                detail: "You both speak more directly and ask fewer follow-up questions when the topic turns to budgets or planning."
+            ),
+            .init(
+                title: "Repair happens faster once the real concern is named",
+                detail: "When one of you says what you are actually afraid of, the conversation usually softens within a few minutes."
+            )
+        ],
+        improving: [
+            .init(
+                title: "Interruptions are down this month",
+                detail: "You are both leaving more space before jumping in, especially in shorter check-in conversations."
+            ),
+            .init(
+                title: "You are recovering from tension faster",
+                detail: "Even when conversations get sharp, you are finding your way back sooner than you were a few weeks ago."
+            ),
+            .init(
+                title: "Shared goals are helping",
+                detail: "Conversations that begin with a clear idea of success end warmer and feel more collaborative."
+            )
+        ],
+        workOnAreas: [
+            .init(
+                title: "Name the feeling underneath the logistics",
+                detail: "Try to say the emotional point out loud before discussing what the plan should be."
+            ),
+            .init(
+                title: "Catch the first defensive response",
+                detail: "The moment one of you starts explaining instead of reflecting is usually the moment the conversation turns."
+            ),
+            .init(
+                title: "Define success together earlier",
+                detail: "A simple shared goal at the start tends to keep the conversation from drifting into old patterns."
+            )
+        ]
+    )
+
+    private init(
+        relationshipID: String?,
+        timeWindow: String?,
+        primaryFocus: PrimaryFocus,
+        whyThisMatters: [InsightItem],
+        relationshipPatterns: [InsightItem],
+        improving: [InsightItem],
+        workOnAreas: [InsightItem]
+    ) {
+        self.relationshipID = relationshipID
+        self.timeWindow = timeWindow
+        self.primaryFocus = primaryFocus
+        self.whyThisMatters = whyThisMatters
+        self.relationshipPatterns = relationshipPatterns
+        self.improving = improving
+        self.workOnAreas = workOnAreas
     }
 }
 
@@ -1216,6 +1488,27 @@ private actor PresenceV2BackendClient {
 
             let analysis = try JSONDecoder().decode(PresenceV2AnalysisResponse.self, from: data)
             return .success(analysis)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    func fetchWorkOn() async -> Result<PresenceV2WorkOnResponse, Error> {
+        guard let url = URL(string: PresenceV2BackendConfig.workOnURLString), !PresenceV2BackendConfig.workOnURLString.isEmpty else {
+            return .failure(BackendError.notConfigured)
+        }
+
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                throw BackendError.badResponse
+            }
+
+            let workOn = try JSONDecoder().decode(PresenceV2WorkOnResponse.self, from: data)
+            return .success(workOn)
         } catch {
             return .failure(error)
         }

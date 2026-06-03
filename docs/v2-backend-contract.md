@@ -1,82 +1,49 @@
-# Presence v2 Backend Contract
+# Presence v2 backend contract
 
-This document defines the frontend/backend contract for the simpler relationship-focused v2 product.
+This is where the app is right now.
 
-The goal is to make one loop real:
+There are really two backend jobs:
 
-1. Two partners define success out loud
-2. Presence records the conversation
-3. The app uploads the packaged audio + metadata
-4. The backend analyzes it
-5. The app renders a results page
+1. analyze one conversation
+2. look across conversations and tell the couple what to work on
 
-## Product framing
+The app is already wired for both.
 
-Presence is not sending "a voice memo."
+There are also really two user loops:
 
-It is sending:
+1. `we're about to have a conversation, let's use Presence`
+2. `what have we been like lately, and what should we work on?`
 
-- a shared success definition from both partners
-- the conversation audio itself
-- enough metadata to let the backend interpret the session correctly
+If no backend URLs are configured yet, both flows fall back to local demo data so the app still works.
 
-The backend should return:
+The two empty config values in `/Users/krishen/Documents/Playground/presence/Sources/PresenceApp.swift` are:
 
-- a high-confidence relationship debrief
-- specific evidence moments
-- structured fields for the results UI
+- `PresenceV2BackendConfig.analyzeURLString`
+- `PresenceV2BackendConfig.workOnURLString`
 
-## Frontend flow
+## 1. conversation review
 
-### 1. Start a conversation
+This is the flow behind `Start a conversation`.
 
-The user chooses:
+The loop is:
 
-- `Start a conversation`
+1. both people say what success looks like
+2. Presence listens
+3. the app uploads the audio plus that success definition
+4. the backend returns a relationship debrief
+5. the app shows the review page
 
-### 2. Success definition capture
+This is the in-the-moment loop.
 
-The app captures two short spoken responses:
+### what the app sends today
 
-- `You`
-- `Your partner`
+Right now the app sends `multipart/form-data`.
 
-These are stored as:
-
-- transcript text
-- audio file URL or recorded file reference if needed later
-
-The frontend combines those responses into one shared success definition for display, but it should also send the per-speaker raw fields to the backend.
-
-### 3. Conversation capture
-
-The app records:
-
-- full conversation audio
-- start time
-- end time
-- elapsed duration
-- optional live transcript fragments if we choose to send them later
-
-### 4. Processing
-
-The app uploads one request to the backend and waits for one structured response.
-
-## Recommended request shape
-
-Use `multipart/form-data` for the first version.
-
-That keeps the audio upload simple and avoids base64 overhead.
-
-### Endpoint
-
-Suggested:
+Suggested endpoint:
 
 `POST /api/v1/conversations/analyze`
 
-### Multipart fields
-
-#### Required text fields
+Fields the frontend already sends:
 
 - `session_id`
 - `started_at`
@@ -87,27 +54,14 @@ Suggested:
 - `participant_one_success_definition`
 - `participant_two_success_definition`
 - `shared_success_definition`
-
-#### Optional text fields
-
-- `app_version`
-- `ios_version`
-- `device_model`
-- `locale`
-- `timezone`
 - `prototype_track`
-
-#### Required file field
-
 - `conversation_audio`
 
-Suggested accepted content types:
+Current audio content type:
 
-- `audio/m4a`
-- `audio/wav`
 - `audio/x-caf`
 
-### Example request fields
+Example:
 
 ```text
 session_id=2C20D5D0-0D99-4B5E-9A0B-8D2F8A13E5B3
@@ -124,54 +78,32 @@ Your partner: I want to feel heard first, then leave with a clear plan we both b
 prototype_track=v2
 ```
 
-## Alternate JSON-first shape
+If you want to do pre-signed upload later, that’s fine. But the app is currently built for one simple multipart request.
 
-If the backend prefers pre-signed uploads, use a two-step flow:
+### what the backend should return
 
-1. frontend uploads audio to storage
-2. frontend sends JSON with `audio_url`
+The review page is not supposed to feel like analytics. It should feel like:
 
-Suggested JSON body:
+- here’s what happened
+- here’s where it changed
+- here’s what each person needed
+- here’s what to try next time
 
-```json
-{
-  "session_id": "2C20D5D0-0D99-4B5E-9A0B-8D2F8A13E5B3",
-  "started_at": "2026-06-03T22:15:14Z",
-  "ended_at": "2026-06-03T22:28:42Z",
-  "duration_seconds": 808,
-  "participants": [
-    {
-      "id": "p1",
-      "label": "You",
-      "success_definition": "I want us to stay calm and actually feel understood before we solve anything."
-    },
-    {
-      "id": "p2",
-      "label": "Your partner",
-      "success_definition": "I want to feel heard first, then leave with a clear plan we both believe in."
-    }
-  ],
-  "shared_success_definition": "You: I want us to stay calm and actually feel understood before we solve anything.\n\nYour partner: I want to feel heard first, then leave with a clear plan we both believe in.",
-  "audio": {
-    "url": "https://...",
-    "content_type": "audio/x-caf"
-  },
-  "client": {
-    "app_version": "1.0",
-    "prototype_track": "v2"
-  }
-}
-```
+So the response needs to support:
 
-## Recommended response shape
+- one headline insight
+- the shared success definition
+- balance of words
+- interruptions
+- connection score
+- key moments with quotes and timestamps
+- what each person needed
+- one next step per person
 
-The results page should be driven by one stable response object.
-
-Suggested:
+This is the shape the frontend is decoding right now:
 
 ```json
 {
-  "analysis_id": "a_01J7YF7TQJX2M1Q3W9R5Z1A9AB",
   "session_id": "2C20D5D0-0D99-4B5E-9A0B-8D2F8A13E5B3",
   "status": "completed",
   "summary": {
@@ -234,80 +166,176 @@ Suggested:
   ],
   "next_time": [
     {
-      "person": "You",
+      "person": "For you",
       "try": "Before explaining your intent, reflect back the feeling you think you heard in one sentence."
     },
     {
-      "person": "Your partner",
+      "person": "For your partner",
       "try": "Name the underlying need earlier, before the conversation gets pulled into logistics."
     }
-  ]
+  ],
+  "duration_seconds": 808
 }
 ```
 
-## Minimum response fields for v1 backend
+The frontend is fine with extra fields too. So if the backend wants to include things like:
 
-If your cofounder wants to move fast, these are the minimum useful fields:
+- `analysis_id`
+- `created_at`
+- `confidence`
+- `transcript`
+- `speaker_segments`
+
+that won’t break anything.
+
+If you want the minimum useful version, this is enough:
 
 - `summary.headline`
+- `success_definition.shared`
 - `metrics.word_balance`
 - `metrics.interruptions`
 - `metrics.connection_score`
 - `key_moments[]`
 - `unmet_needs[]`
 - `next_time[]`
+- `duration_seconds`
 
-Everything else can be filled in later.
+## 2. what should we work on?
 
-## Error states
+This is the longitudinal relationship page.
 
-The backend should return predictable errors so the frontend can render calm recovery states.
+This is the come-back-later loop.
 
-Suggested:
+It is not:
+
+- what happened in this conversation
+
+It is:
+
+- what tends to happen between us over time
+- how are we showing up together lately
+- what is actually worth working on right now
+
+This page should feel like:
+
+- here’s the one thing most worth working on now
+- here’s why
+- here are the recurring patterns
+- here’s what’s getting better too
+
+### what the app calls today
+
+The frontend is currently set up to call:
+
+`GET /api/v1/relationships/work-on`
+
+Right now it does not send query params from the app.
+
+So the easiest backend implementation is:
+
+- infer the current relationship from auth or session context, or
+- just return one demo/default relationship payload for now
+
+Later we can add:
+
+- `relationship_id`
+- `time_window`
+- `topics`
+- `conversation_types`
+
+But the app does not need that yet.
+
+### what the backend should return
+
+The frontend is decoding this shape right now:
 
 ```json
 {
-  "status": "error",
-  "code": "AUDIO_TOO_SHORT",
-  "message": "The conversation was too short to analyze meaningfully."
+  "relationship_id": "rel_01J7ZF4M1M0P2X3A1Y4V9B",
+  "time_window": "90d",
+  "primary_focus": {
+    "title": "Stay with the feeling before moving into solutions.",
+    "summary": "The two of you tend to reconnect when the emotional part lands first. When one of you starts fixing too early, the conversation becomes more procedural and less connected.",
+    "frequency_label": "6 of your last 10 conversations",
+    "context_label": "Especially true in money and planning"
+  },
+  "why_this_matters": [
+    {
+      "title": "Connection is stronger when you slow down first",
+      "detail": "When feelings are named before logistics, your connection score is about 14 points higher than usual."
+    },
+    {
+      "title": "This pattern shows up in harder conversations",
+      "detail": "It appears most often in discussions about money, planning, and chores, especially when you are both already tired."
+    }
+  ],
+  "relationship_patterns": [
+    {
+      "title": "One of you tends to want reassurance while the other wants clarity",
+      "detail": "The most productive conversations happen when both needs are made visible early instead of competing under the surface."
+    },
+    {
+      "title": "Money conversations become more efficient and less curious",
+      "detail": "You both speak more directly and ask fewer follow-up questions when the topic turns to budgets or planning."
+    }
+  ],
+  "improving": [
+    {
+      "title": "Interruptions are down this month",
+      "detail": "You are both leaving more space before jumping in, especially in shorter check-in conversations."
+    },
+    {
+      "title": "You are recovering from tension faster",
+      "detail": "Even when conversations get sharp, you are finding your way back sooner than you were a few weeks ago."
+    }
+  ],
+  "work_on_areas": [
+    {
+      "title": "Name the feeling underneath the logistics",
+      "detail": "Try to say the emotional point out loud before discussing what the plan should be."
+    },
+    {
+      "title": "Catch the first defensive response",
+      "detail": "The moment one of you starts explaining instead of reflecting is usually the moment the conversation turns."
+    },
+    {
+      "title": "Define success together earlier",
+      "detail": "A simple shared goal at the start tends to keep the conversation from drifting into old patterns."
+    }
+  ]
 }
 ```
 
-Suggested error codes:
+Minimum useful version here is:
 
-- `UNAUTHORIZED`
-- `INVALID_AUDIO_FORMAT`
-- `AUDIO_TOO_SHORT`
-- `TRANSCRIPTION_FAILED`
-- `ANALYSIS_FAILED`
-- `RATE_LIMITED`
-- `INTERNAL_ERROR`
+- `primary_focus`
+- `why_this_matters[]`
+- `relationship_patterns[]`
+- `improving[]`
+- `work_on_areas[]`
 
-## Frontend handling expectations
+## shortest possible backend version
 
-The app should be prepared for:
+If your codeveloper wants the fastest path:
 
-- upload in progress
-- analysis in progress
-- partial failure
-- successful result
+### endpoint 1
 
-Suggested polling fallback if the analysis is async:
+`POST /api/v1/conversations/analyze`
 
-1. `POST /api/v1/conversations/analyze`
-2. receive `analysis_id` and `status: processing`
-3. poll `GET /api/v1/conversations/analyze/:analysis_id`
-4. navigate to results when `status: completed`
+Accept multipart audio + success definition fields.
+Return the review-page payload above.
 
-If the backend can return the full result synchronously for now, that is simpler for the prototype.
+### endpoint 2
 
-## Recommendation
+`GET /api/v1/relationships/work-on`
 
-Best first backend contract:
+Return the longitudinal payload above.
 
-- `multipart/form-data`
-- one audio file
-- both success-definition transcripts as text fields
-- one structured synchronous JSON response
+## current fallback behavior
 
-That is the fastest way to make the full loop real without overdesigning the transport.
+Until the URLs are filled in:
+
+- `PresenceV2BackendConfig.analyzeURLString`
+- `PresenceV2BackendConfig.workOnURLString`
+
+the app will keep using local demo data for both surfaces.
