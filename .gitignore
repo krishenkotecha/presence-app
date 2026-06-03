@@ -1,0 +1,25 @@
+.DS_Store
+
+# Xcode user + local machine state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Swift Package Manager
+.build/
+Package.resolved
+
+# Xcode build outputs
+DerivedData/
+build/
+
+# Fastlane / screenshots / logs
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# Temporary files
+*.swp
+*.tmp
+*.log

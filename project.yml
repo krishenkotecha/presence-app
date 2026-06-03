@@ -1,0 +1,33 @@
+name: Presence
+options:
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: com.krishenkotecha.Presence
+    SWIFT_VERSION: 5.0
+    DEVELOPMENT_TEAM: G8AM6B38YJ
+targets:
+  Presence:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Config/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+    settings:
+      base:
+        PRODUCT_NAME: Presence
+        TARGETED_DEVICE_FAMILY: "1"
+    dependencies: []
+  PresenceTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Presence
