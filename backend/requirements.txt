@@ -1,0 +1,12 @@
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+python-multipart>=0.0.9
+httpx>=0.27
+openai>=1.30
+anthropic>=0.40
+# Optional, for real audio transcription (plus `ffmpeg` on PATH):
+#   pip install faster-whisper
+# Optional, for speaker diarization -> computed word_balance + interruptions
+# (needs a Hugging Face token in RELINT_HF_TOKEN, accept the pyannote model terms):
+#   pip install pyannote.audio

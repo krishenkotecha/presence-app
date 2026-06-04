@@ -43,12 +43,12 @@ struct PresenceV2StarterRootView: View {
 private struct PresenceV2SuccessCapture {
     let participantOne: String
     let participantTwo: String
-    let shared: String
 }
 
 private enum PresenceV2BackendConfig {
-    static let analyzeURLString = ""
-    static let workOnURLString = ""
+    // Simulator: localhost works. Physical device: use Mac's LAN IP (e.g. "http://192.168.x.x:8000/...")
+    static let analyzeURLString = "http://127.0.0.1:8000/api/v1/conversations/analyze"
+    static let workOnURLString  = "http://127.0.0.1:8000/api/v1/relationships/work-on"
 }
 
 private struct PresenceV2HomeView: View {
@@ -251,8 +251,7 @@ private struct PresenceV2SuccessDefinitionView: View {
         let second = partnerTwoResponse ?? "I want to feel understood first, then land on a plan together."
         return PresenceV2SuccessCapture(
             participantOne: first,
-            participantTwo: second,
-            shared: "You: \(first)\n\nYour partner: \(second)"
+            participantTwo: second
         )
     }
 
@@ -464,7 +463,6 @@ private struct PresenceV2ConversationView: View {
                     participantTwoLabel: "Your partner",
                     participantOneSuccessDefinition: successCapture.participantOne,
                     participantTwoSuccessDefinition: successCapture.participantTwo,
-                    sharedSuccessDefinition: successCapture.shared,
                     conversationAudioURL: monitor.recordedFileURL
                 )
             )
@@ -564,7 +562,7 @@ private struct PresenceV2ConversationView: View {
     }
 
     private var successDefinition: String {
-        successCapture.shared
+        "You: \(successCapture.participantOne)\n\nYour partner: \(successCapture.participantTwo)"
     }
 }
 
@@ -605,7 +603,7 @@ private struct PresenceV2ProcessingView: View {
                     .textCase(.uppercase)
                     .tracking(0.7)
 
-                Text(submission.sharedSuccessDefinition)
+                Text("You: \(submission.participantOneSuccessDefinition)\n\nYour partner: \(submission.participantTwoSuccessDefinition)")
                     .font(.system(.body, design: theme.bodyDesign))
                     .foregroundStyle(theme.primaryText)
             }
@@ -1266,7 +1264,6 @@ private struct PresenceV2ConversationSubmission {
     let participantTwoLabel: String
     let participantOneSuccessDefinition: String
     let participantTwoSuccessDefinition: String
-    let sharedSuccessDefinition: String
     let conversationAudioURL: URL?
 }
 
@@ -1407,7 +1404,7 @@ private struct PresenceV2AnalysisResponse: Decodable {
             successDefinition: SuccessDefinition(
                 participantOne: submission.participantOneSuccessDefinition,
                 participantTwo: submission.participantTwoSuccessDefinition,
-                shared: submission.sharedSuccessDefinition
+                shared: "You both wanted understanding before problem-solving."
             ),
             metrics: Metrics(
                 wordBalance: .init(participantOnePercent: 54, participantTwoPercent: 46, label: "Fairly even"),
@@ -1531,7 +1528,6 @@ private actor PresenceV2BackendClient {
         appendField(name: "participant_two_label", value: submission.participantTwoLabel)
         appendField(name: "participant_one_success_definition", value: submission.participantOneSuccessDefinition)
         appendField(name: "participant_two_success_definition", value: submission.participantTwoSuccessDefinition)
-        appendField(name: "shared_success_definition", value: submission.sharedSuccessDefinition)
         appendField(name: "prototype_track", value: "v2")
 
         let fileData = try Data(contentsOf: audioURL)
@@ -1625,7 +1621,7 @@ private final class PresenceSpeechCaptureManager: NSObject, ObservableObject {
         recordedFileURL = temporaryRecordingURL()
 
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetoothHFP])
+        try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetooth])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         recognitionTask?.cancel()

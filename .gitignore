@@ -23,3 +23,10 @@ fastlane/test_output/
 *.swp
 *.tmp
 *.log
+
+# Backend runtime artifacts
+backend/__pycache__/
+backend/*.pyc
+backend/relint.db
+backend/*.aiff
+backend/.env
