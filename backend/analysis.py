@@ -103,6 +103,10 @@ Rules:
 apart, estimate and set "confidence" to "low". connection_score is 0-100. (word_balance and \
 interruptions may be replaced by measured values when speaker diarization is available — still \
 provide your best estimate.)
+- HONESTY ABOUT PRECISION: connection_score and its delta_label are impressions, not measurements. \
+delta_label must be QUALITATIVE and must NEVER state a fabricated precise number \
+(write "warmer once the pace slowed", not "+9 once you slowed down"). Do not imply a metric was \
+counted when it was estimated.
 - key_moments: 2-4 moments. timestamp_ms must fall within the conversation; use the provided segment \
 timestamps when available, otherwise estimate between 0 and duration*1000.
 - shared_success: one warm sentence naming the goal both people shared."""
@@ -176,9 +180,58 @@ def _review_user_msg(meta, transcript, segments):
 
 
 def generate_review(meta, transcript, segments=None):
+    # `transcript` already carries speaker labels + timestamps when available
+    # (see signals.render_transcript), so we usually pass segments=None on purpose.
     user = _review_user_msg(meta, transcript, segments)
     d = _generate(REVIEW_SYSTEM, user, REVIEW_SCHEMA)
-    return _coerce(d, REVIEW_REQUIRED)
+    d = _coerce(d, REVIEW_REQUIRED)
+    return _fill_review_defaults(d, meta)
+
+
+# Local models are less reliable than Claude at emitting strict JSON, so we
+# guarantee every nested block the frontend decodes exists before returning.
+def _fill_review_defaults(body, meta):
+    p1 = meta.get("p1_label", "You")
+    p2 = meta.get("p2_label", "Your partner")
+
+    summary = body.get("summary") or {}
+    summary.setdefault("headline", "Here's what stood out in this conversation.")
+    summary.setdefault("subheadline", "")
+    body["summary"] = summary
+
+    body.setdefault("shared_success", "")
+
+    metrics = body.get("metrics") or {}
+    wb = metrics.get("word_balance") or {}
+    wb.setdefault("participant_one_percent", 50)
+    wb.setdefault("participant_two_percent", 100 - wb["participant_one_percent"])
+    wb.setdefault("label", "Fairly even")
+    metrics["word_balance"] = wb
+
+    inter = metrics.get("interruptions") or {}
+    inter.setdefault("total", 0)
+    inter.setdefault("participant_one", 0)
+    inter.setdefault("participant_two", 0)
+    inter.setdefault("label", "Hard to tell")
+    metrics["interruptions"] = inter
+
+    cs = metrics.get("connection_score") or {}
+    cs.setdefault("score", 50)
+    cs.setdefault("delta_label", "")
+    metrics["connection_score"] = cs
+
+    ra = metrics.get("repair_attempts") or {}
+    ra.setdefault("total", 0)
+    ra.setdefault("label", "")
+    metrics["repair_attempts"] = ra
+
+    body["metrics"] = metrics
+
+    body.setdefault("key_moments", [])
+    body.setdefault("unmet_needs", [])
+    body.setdefault("next_time", [])
+    body.setdefault("confidence", "low")
+    return body
 
 
 # --------------------------------------------------------------------------- #
@@ -200,7 +253,10 @@ Output ONLY a JSON object with this exact shape:
 }
 Ground every claim in the history provided. If the history is thin, stay appropriately tentative. \
 primary_focus is the single most worth-it thing right now. Always include something in "improving" \
-— name what is getting better, not only what is wrong."""
+— name what is getting better, not only what is wrong. \
+HONESTY ABOUT PRECISION: frequency_label and any counts ("6 of your last 10") must reflect the \
+actual number of conversations in the history — never invent a tally. Prefer qualitative phrasing \
+("in most of your recent conversations") when you cannot count it exactly."""
 
 WORKON_SCHEMA = {
     "type": "object",
@@ -227,6 +283,103 @@ def generate_work_on(history):
             + "\n\nProduce the longitudinal work-on JSON.")
     d = _generate(WORKON_SYSTEM, user, WORKON_SCHEMA)
     return _coerce(d, WORKON_REQUIRED)
+
+
+# --------------------------------------------------------------------------- #
+# Solo (single-user) reflection — prompt + schema
+# --------------------------------------------------------------------------- #
+
+SOLO_SYSTEM = FRAMEWORK + """
+
+You are helping ONE person (the absent partner is NOT here). Output ONLY a JSON object \
+(no prose, no markdown fences, no <think> block) with this exact shape:
+{
+  "summary": {"headline": str},
+  "translation": {"what_they_may_have_meant": str, "their_possible_need": str},
+  "your_part": str,
+  "suggested_next": str,
+  "reframe": str,
+  "confidence": "low"|"medium"
+}
+
+SOLO-SPECIFIC HARD CONSTRAINTS (never violate):
+- TRANSLATE TOWARD UNDERSTANDING, NEVER TOWARD WINNING. Never help the user build a case, \
+score a point, or prove the other person wrong. Orient everything to the other person's \
+likely unmet need and to what the user can do.
+- The partner is absent and cannot consent or correct, so be EVEN MORE tentative about their \
+inner state ("may", "it seems", "one possibility"). Never assert what they "really" meant.
+- "your_part" is a gentle, optional invitation to self-reflection — never blame the user \
+either. It may be brief; keep it kind.
+- "suggested_next" is ONE small, doable move: a soft, non-escalating thing to say (decode), a \
+gentle start-up opener (prep), or a repair/reconnection move (reflect).
+- If the text suggests abuse, coercion, or danger, do NOT coach "communication"; in \
+"suggested_next" gently encourage reaching out to a trusted person or professional support."""
+
+SOLO_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "object", "properties": {"headline": {"type": "string"}},
+                    "required": ["headline"]},
+        "translation": {"type": "object", "properties": {
+            "what_they_may_have_meant": {"type": "string"},
+            "their_possible_need": {"type": "string"}},
+            "required": ["what_they_may_have_meant", "their_possible_need"]},
+        "your_part": {"type": "string"},
+        "suggested_next": {"type": "string"},
+        "reframe": {"type": "string"},
+        "confidence": {"type": "string", "enum": ["low", "medium"]},
+    },
+    "required": ["summary", "translation", "your_part", "suggested_next", "confidence"],
+}
+
+_SOLO_MODE_PROMPTS = {
+    "decode": (
+        "Mode: DECODE.\n"
+        "Your partner said: \"{quote}\"\n"
+        "Context from the user: {text}\n\n"
+        "Help the user understand what their partner may have meant and the unmet need "
+        "beneath it, and put a soft, non-escalating way to respond in \"suggested_next\"."
+    ),
+    "prep": (
+        "Mode: PREP. The user wants to have this conversation: {text}\n"
+        "(If a specific line is provided: \"{quote}\")\n\n"
+        "Help them prepare. Use \"translation\" for what their partner may be experiencing and "
+        "may need. Put a soft start-up opener in \"suggested_next\" and a pitfall to avoid in "
+        "\"reframe\"."
+    ),
+    "reflect": (
+        "Mode: REFLECT. The user is processing what happened: {text}\n"
+        "(Relevant line, if any: \"{quote}\")\n\n"
+        "Help them see the need under their own reaction and their partner's likely need. Put "
+        "one repair or reconnection move in \"suggested_next\"."
+    ),
+}
+
+
+def generate_reflection(mode, text, quote=None):
+    mode = (mode or "decode").lower()
+    template = _SOLO_MODE_PROMPTS.get(mode, _SOLO_MODE_PROMPTS["decode"])
+    user = template.format(text=(text or "").strip(), quote=(quote or "").strip())
+    d = _generate(SOLO_SYSTEM, user, SOLO_SCHEMA)
+    return _fill_reflection_defaults(d)
+
+
+# Local models are less reliable at strict JSON, so guarantee every block the app decodes.
+def _fill_reflection_defaults(body):
+    summary = body.get("summary") or {}
+    summary.setdefault("headline", "Here's one way to make sense of this.")
+    body["summary"] = summary
+
+    tr = body.get("translation") or {}
+    tr.setdefault("what_they_may_have_meant", "")
+    tr.setdefault("their_possible_need", "")
+    body["translation"] = tr
+
+    body.setdefault("your_part", "")
+    body.setdefault("suggested_next", "")
+    body.setdefault("reframe", "")
+    body.setdefault("confidence", "low")
+    return body
 
 
 # --------------------------------------------------------------------------- #
@@ -329,7 +482,7 @@ def demo_review(p1_label="You", p2_label="Your partner", p1_def="", p2_def=""):
         "metrics": {
             "word_balance": {"participant_one_percent": 54, "participant_two_percent": 46, "label": "Fairly even"},
             "interruptions": {"total": 7, "participant_one": 5, "participant_two": 2, "label": f"Mostly from {p1_label.lower()}"},
-            "connection_score": {"score": 78, "delta_label": "+9 once you slowed down"},
+            "connection_score": {"score": 78, "delta_label": "Felt warmer once the pace slowed"},
             "repair_attempts": {"total": 3, "label": "Two landed well"},
         },
         "key_moments": [
@@ -362,7 +515,7 @@ def demo_work_on():
         },
         "why_this_matters": [
             {"title": "Connection is stronger when you slow down first",
-             "detail": "When feelings are named before logistics, your connection score is about 14 points higher than usual."},
+             "detail": "When feelings are named before logistics, the conversation tends to feel noticeably more connected."},
             {"title": "This pattern shows up in harder conversations",
              "detail": "It appears most often in money, planning, and chores, especially when you are both already tired."},
         ],
@@ -387,3 +540,43 @@ def demo_work_on():
              "detail": "A simple shared goal at the start tends to keep the conversation from drifting into old patterns."},
         ],
     }
+
+
+def demo_reflection(mode="decode"):
+    mode = (mode or "decode").lower()
+    base = {
+        "decode": {
+            "summary": {"headline": "Underneath the sharp words may be a bid for reassurance."},
+            "translation": {
+                "what_they_may_have_meant": "When they said that, it may have been less about the plan and more about feeling like they were carrying it alone.",
+                "their_possible_need": "To feel that you're on the same side, and that their effort is seen.",
+            },
+            "your_part": "It's worth noticing whether you moved to fix the logistics before the feeling had landed — easy to do, and not a failing.",
+            "suggested_next": "Try: \"It sounds like you felt alone in this — did I get that right?\" before anything about the plan.",
+            "reframe": "This reads less like criticism of you and more like a reach for partnership.",
+            "confidence": "low",
+        },
+        "prep": {
+            "summary": {"headline": "Go in naming what you each need, before the logistics."},
+            "translation": {
+                "what_they_may_have_meant": "Hard to know yet — but they may come in braced for this to become a list of problems.",
+                "their_possible_need": "To feel the conversation is with them, not at them.",
+            },
+            "your_part": "Get clear on the one thing you actually need from this talk, so it doesn't get lost in the details.",
+            "suggested_next": "Open with: \"I want us to come out of this feeling closer, not just with a plan — can we start there?\"",
+            "reframe": "Pitfall to avoid: leading with the solution before the feeling has been named.",
+            "confidence": "low",
+        },
+        "reflect": {
+            "summary": {"headline": "Your reaction may be pointing at a need that didn't get met."},
+            "translation": {
+                "what_they_may_have_meant": "Their pulling back may have been overwhelm rather than indifference.",
+                "their_possible_need": "A moment to slow down before solving.",
+            },
+            "your_part": "The frustration you felt might be standing in for wanting to feel chosen and prioritized.",
+            "suggested_next": "A small repair: \"I think I got sharp earlier — I actually just wanted to feel like we were a team. Can we try again?\"",
+            "reframe": "A rough moment isn't the whole story; the repair matters more than the rupture.",
+            "confidence": "low",
+        },
+    }
+    return base.get(mode, base["decode"])
