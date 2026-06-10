@@ -31,17 +31,22 @@ Current prototype goal:
 
 This repo also includes a separate v2 starter shell for a simpler second direction.
 
-- App switch: `/Users/krishen/Documents/Playground/presence/Sources/PresenceApp.swift`
-- Starter shell: `/Users/krishen/Documents/Playground/presence/Sources/V2/PresenceV2StarterRootView.swift`
-- Notes: `/Users/krishen/Documents/Playground/presence/docs/v2-start-here.md`
+- App switch: `Sources/PresenceApp.swift` (set `activeTrack` to `.v1` or `.v2Starter`)
+- Starter shell + all v2 views: `Sources/PresenceApp.swift` (`PresenceV2StarterRootView` and the `PresenceV2*` views live inline in this file today)
+- Notes: `docs/v2-start-here.md`
 
 The app is currently pointed at the v2 starter so we can begin shaping the next concept without disturbing the fuller v1 prototype.
 
 Current v2 backend contract:
 
-- [v2-backend-contract.md](/Users/krishen/Documents/Playground/presence/docs/v2-backend-contract.md)
-- [v2-review-page.md](/Users/krishen/Documents/Playground/presence/docs/v2-review-page.md)
-- [collaboration-setup.md](/Users/krishen/Documents/Playground/presence/docs/collaboration-setup.md)
+- [v2-backend-contract.md](docs/v2-backend-contract.md)
+- [v2-review-page.md](docs/v2-review-page.md)
+- [v2-frontend-redesign.md](docs/v2-frontend-redesign.md) — redesign + joy-loop plan, prioritized
+- [v2-backend-redesign.md](docs/v2-backend-redesign.md) — backend roadmap re-ranked by the 7 Powers
+- [v2-strategy-7-powers.md](docs/v2-strategy-7-powers.md) — Helmer 7 Powers strategy / moat plan
+- [v2-pivot-options.md](docs/v2-pivot-options.md) — adoption pivots + expanded-utility plan
+- [v2-solo-experience.md](docs/v2-solo-experience.md) — single-user on-ramp build spec (branch-ready)
+- [collaboration-setup.md](docs/collaboration-setup.md)
 
 The current v2 product now has two output surfaces:
 

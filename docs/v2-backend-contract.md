@@ -16,7 +16,9 @@ There are also really two user loops:
 
 If no backend URLs are configured yet, both flows fall back to local demo data so the app still works.
 
-The two empty config values in `/Users/krishen/Documents/Playground/presence/Sources/PresenceApp.swift` are:
+The backend is configured in one place in `Sources/PresenceApp.swift` via
+`PresenceV2BackendConfig.baseURLString` (currently `http://127.0.0.1:8000`; set to `""`
+to force the on-device demo). The endpoint URLs are derived from it:
 
 - `PresenceV2BackendConfig.analyzeURLString`
 - `PresenceV2BackendConfig.workOnURLString`

@@ -4,8 +4,8 @@ This repo now includes a separate v2 starter shell so we can explore a simpler v
 
 ## where it lives
 
-- App switch: `/Users/krishen/Documents/Playground/presence/Sources/PresenceApp.swift`
-- v2 shell: `/Users/krishen/Documents/Playground/presence/Sources/V2/PresenceV2StarterRootView.swift`
+- App switch: `Sources/PresenceApp.swift` (the `activeTrack` constant)
+- v2 shell + views: `Sources/PresenceApp.swift` (`PresenceV2StarterRootView` and the `PresenceV2*` views are defined inline in this file today; there is no separate `Sources/V2/` directory yet)
 
 ## current behavior
 
@@ -56,7 +56,7 @@ The review page should:
 
 Reference:
 
-- `/Users/krishen/Documents/Playground/presence/docs/v2-review-page.md`
+- `docs/v2-review-page.md`
 
 The `What should we work on?` page should:
 
@@ -67,13 +67,13 @@ The `What should we work on?` page should:
 
 Backend reference:
 
-- `/Users/krishen/Documents/Playground/presence/docs/v2-backend-contract.md`
+- `docs/v2-backend-contract.md`
 
 ## backend handoff
 
 The current frontend/backend contract lives here:
 
-- `/Users/krishen/Documents/Playground/presence/docs/v2-backend-contract.md`
+- `docs/v2-backend-contract.md`
 
 The current frontend already supports:
 
