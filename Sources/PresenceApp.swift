@@ -66,6 +66,9 @@ private enum PresenceV2BackendConfig {
     static func followupsURLString(userID: String) -> String {
         apiRoot.isEmpty ? "" : apiRoot + "/reflections/followups?user_id=\(userID)"
     }
+    static func resourcesRecommendURLString(userID: String) -> String {
+        apiRoot.isEmpty ? "" : apiRoot + "/resources/recommend?user_id=\(userID)"
+    }
     static func feedbackURLString(sessionID: String) -> String {
         apiRoot.isEmpty ? "" : apiRoot + "/conversations/\(sessionID)/feedback"
     }
@@ -176,6 +179,15 @@ private struct PresenceHomeView: View {
             secondaryActionRow(title: "How did it go?",
                                subtitle: "Check in on something you tried.",
                                systemImage: "checkmark.circle")
+        }
+        .buttonStyle(.plain)
+
+        NavigationLink {
+            PresenceResourcesView()
+        } label: {
+            secondaryActionRow(title: "Worth exploring",
+                               subtitle: "Videos & reads for what keeps coming up.",
+                               systemImage: "play.rectangle.on.rectangle")
         }
         .buttonStyle(.plain)
     }
@@ -2208,6 +2220,18 @@ private actor PresenceV2BackendClient {
         }
     }
 
+    func fetchResources(userID: String) async -> [PresenceResource] {
+        let urlString = PresenceV2BackendConfig.resourcesRecommendURLString(userID: userID)
+        guard !urlString.isEmpty, let url = URL(string: urlString) else { return [] }
+        do {
+            let (data, response) = try await withRetry { try await session.data(from: url) }
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { return [] }
+            return (try? JSONDecoder().decode(PresenceResourceList.self, from: data))?.resources ?? []
+        } catch {
+            return []
+        }
+    }
+
     func fetchLatest() async -> Result<PresenceV2AnalysisResponse, Error> {
         let latest = PresenceV2BackendConfig.latestURLString
         guard !latest.isEmpty, let url = URL(string: latest) else {
@@ -3487,5 +3511,116 @@ private struct PresenceSoloFollowupView: View {
 
     private func log(_ item: PresenceFollowup, _ kind: String, _ value: String) {
         Task { await PresenceV2BackendClient.shared.logEvent(userID: userID, reflectionID: item.reflectionID, kind: kind, value: value) }
+    }
+}
+
+// MARK: - Discovery resources (docs/v3-conversation-infra.md)
+
+private struct PresenceResource: Decodable, Identifiable {
+    let id: String
+    let title: String
+    let creator: String
+    let kind: String
+    let url: String
+    let topics: [String]
+    let axis: String
+    let description: String
+}
+
+private struct PresenceResourceList: Decodable { let resources: [PresenceResource] }
+
+// "Worth exploring" — videos/talks/reads matched to what keeps coming up. Points OUTWARD to
+// real help; never an in-app content feed.
+private struct PresenceResourcesView: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @Environment(\.openURL) private var openURL
+    @State private var items: [PresenceResource] = []
+    @State private var isLoading = true
+
+    private var theme: PresenceTheme { themeStore.current }
+    private var userID: String { PresenceSoloIdentity.userID }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Worth exploring")
+                        .font(.system(size: 28, weight: .bold, design: theme.displayDesign))
+                        .foregroundStyle(theme.primaryText)
+                    Text("A few short videos and reads for what keeps coming up — to take back to real life.")
+                        .font(.system(.subheadline, design: theme.bodyDesign))
+                        .foregroundStyle(theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if isLoading {
+                    HStack(spacing: 10) {
+                        ProgressView().tint(theme.accentSuccess)
+                        Text("Finding resources…")
+                            .font(.system(.subheadline, design: theme.bodyDesign))
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                } else if items.isEmpty {
+                    Text("Reflect a few times and Presence will suggest resources for the patterns it sees.")
+                        .font(.system(.subheadline, design: theme.bodyDesign))
+                        .foregroundStyle(theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ForEach(items) { resourceCard($0) }
+                }
+            }
+            .padding(20)
+        }
+        .background(InsightBackdrop(theme: theme).ignoresSafeArea())
+        .navigationTitle("Explore")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .task {
+            guard isLoading else { return }
+            items = await PresenceV2BackendClient.shared.fetchResources(userID: userID)
+            isLoading = false
+        }
+    }
+
+    private func resourceCard(_ r: PresenceResource) -> some View {
+        Button {
+            if let url = URL(string: r.url) { openURL(url) }
+            Task {
+                await PresenceV2BackendClient.shared.logEvent(
+                    userID: userID, reflectionID: nil, kind: "resource_opened", value: r.id)
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(r.kind.uppercased())
+                        .font(.system(.caption2, design: theme.bodyDesign).weight(.bold))
+                        .foregroundStyle(theme.accentStrong)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(theme.accentStrong.opacity(0.12), in: Capsule())
+                    Spacer()
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.accentStrong)
+                }
+                Text(r.title)
+                    .font(.system(.headline, design: theme.bodyDesign))
+                    .foregroundStyle(theme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !r.creator.isEmpty {
+                    Text(r.creator)
+                        .font(.system(.footnote, design: theme.bodyDesign).weight(.medium))
+                        .foregroundStyle(theme.secondaryText)
+                }
+                Text(r.description)
+                    .font(.system(.subheadline, design: theme.bodyDesign))
+                    .foregroundStyle(theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .background(Color.white.opacity(0.74), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.border.opacity(0.84), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 }
