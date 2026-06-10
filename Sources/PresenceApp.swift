@@ -34,8 +34,9 @@ struct PresenceApp: App {
 
 struct PresenceV2StarterRootView: View {
     var body: some View {
+        // Single home; the Solo/Couple loop tabs live at the top of the hero.
         NavigationStack {
-            PresenceV2HomeView()
+            PresenceHomeView()
         }
     }
 }
@@ -57,90 +58,57 @@ private enum PresenceV2BackendConfig {
     static var latestURLString: String { apiRoot.isEmpty ? "" : apiRoot + "/conversations/latest" }
     // Solo (single-user) reflection — text only, no audio.
     static var reflectURLString: String { apiRoot.isEmpty ? "" : apiRoot + "/reflections/analyze" }
+    // Feature-test instrumentation (see docs/v3-mvp-feature-tests.md).
+    static var eventsURLString: String { apiRoot.isEmpty ? "" : apiRoot + "/events" }
+    static func themesURLString(userID: String) -> String {
+        apiRoot.isEmpty ? "" : apiRoot + "/reflections/themes?user_id=\(userID)"
+    }
+    static func followupsURLString(userID: String) -> String {
+        apiRoot.isEmpty ? "" : apiRoot + "/reflections/followups?user_id=\(userID)"
+    }
     static func feedbackURLString(sessionID: String) -> String {
         apiRoot.isEmpty ? "" : apiRoot + "/conversations/\(sessionID)/feedback"
     }
 }
 
-private enum HomeAudience: String, CaseIterable, Identifiable {
-    case solo, couple
-    var id: String { rawValue }
-    var label: String { self == .solo ? "Just me" : "With my partner" }
-}
-
-private struct PresenceV2HomeView: View {
+private struct PresenceHomeView: View {
     @EnvironmentObject private var themeStore: ThemeStore
+    @State private var loop: HomeLoop = .solo
     @State private var latestAnalysis: PresenceV2AnalysisResponse?
     @State private var isLoadingLatest = false
     @State private var showLatest = false
-    // One explicit choice up front — who is this for — so each mode's actions show alone.
-    @State private var audience: HomeAudience = .solo
 
-    private var theme: PresenceTheme {
-        themeStore.current
+    private enum HomeLoop: String, CaseIterable, Identifiable {
+        case solo, couple
+        var id: String { rawValue }
+        var label: String { self == .solo ? "Solo" : "Couple" }
     }
+
+    private var theme: PresenceTheme { themeStore.current }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 22) {
+                // Hero — the loop tabs sit at the very top, then a loop-specific title.
+                VStack(alignment: .leading, spacing: 14) {
                     Text("Presence")
                         .font(.system(size: 14, weight: .bold, design: theme.bodyDesign))
                         .foregroundStyle(theme.accentSuccess)
                         .textCase(.uppercase)
                         .tracking(1.4)
 
-                    Text("Understand each other better.")
-                        .font(.system(size: 32, weight: .bold, design: theme.displayDesign))
+                    loopTabs
+
+                    Text(loop == .solo
+                         ? "Make sense of a moment, on your own."
+                         : "Have the conversation that matters.")
+                        .font(.system(size: 30, weight: .bold, design: theme.displayDesign))
                         .foregroundStyle(theme.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.top, 12)
 
-                // One clear choice up front: who is this for.
-                audienceToggle
-
-                if audience == .solo {
-                    modeDescriptor("Just you. Nothing recorded, nothing shared — work through a moment in your own words.")
-
-                    NavigationLink {
-                        PresenceSoloInputView()
-                    } label: {
-                        actionCard(
-                            eyebrow: "Make sense of a moment",
-                            title: "Decode what they said, prep for a hard talk, or process what happened.",
-                            detail: "Type or speak — Presence helps you understand and respond."
-                        )
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    modeDescriptor("Sit down together. Define what success looks like, then let Presence listen.")
-
-                    NavigationLink {
-                        PresenceV2SuccessDefinitionView()
-                    } label: {
-                        actionCard(
-                            eyebrow: "Start a conversation",
-                            title: "Set one shared goal, then let Presence listen.",
-                            detail: "Define what success looks like for this conversation first."
-                        )
-                    }
-                    .buttonStyle(.plain)
-
-                    NavigationLink {
-                        PresenceV2WorkOnView()
-                    } label: {
-                        secondaryActionRow(
-                            title: "What should we work on?",
-                            subtitle: "Look back at the patterns worth focusing on next.",
-                            systemImage: "chart.line.uptrend.xyaxis"
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                // Last result — only appears when there's something to show.
-                reviewLastResultRow
+                if loop == .solo { soloLoop } else { coupleLoop }
             }
             .padding(20)
         }
@@ -149,14 +117,93 @@ private struct PresenceV2HomeView: View {
                 PresenceV2InsightView(analysis: analysis)
             }
         }
-        .refreshable {
-            await loadLatest()
-        }
-        .task {
-            await loadLatest()
-        }
+        .refreshable { await loadLatest() }
+        .task { await loadLatest() }
         .background(InsightBackdrop(theme: theme).ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+    }
+
+    // The loop selector — a segmented tab at the top of the hero.
+    private var loopTabs: some View {
+        HStack(spacing: 0) {
+            ForEach(HomeLoop.allCases) { option in
+                let selected = option == loop
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { loop = option }
+                } label: {
+                    Text(option.label)
+                        .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .foregroundStyle(selected ? theme.primaryText : theme.secondaryText)
+                        .background(selected ? Color.white.opacity(0.95) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(Color.white.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.border.opacity(0.6), lineWidth: 1))
+    }
+
+    // Solo loop: reflect → see your patterns → check in on what you tried.
+    @ViewBuilder
+    private var soloLoop: some View {
+        NavigationLink {
+            PresenceSoloInputView()
+        } label: {
+            actionCard(
+                eyebrow: "Make sense of a moment",
+                title: "Decode what they said, prep for a hard talk, or process what happened.",
+                detail: "Type or speak — Presence helps you understand and respond."
+            )
+        }
+        .buttonStyle(.plain)
+
+        NavigationLink {
+            PresenceSoloThemesView()
+        } label: {
+            secondaryActionRow(title: "What keeps coming up",
+                               subtitle: "The patterns across your reflections.",
+                               systemImage: "chart.bar.doc.horizontal")
+        }
+        .buttonStyle(.plain)
+
+        NavigationLink {
+            PresenceSoloFollowupView()
+        } label: {
+            secondaryActionRow(title: "How did it go?",
+                               subtitle: "Check in on something you tried.",
+                               systemImage: "checkmark.circle")
+        }
+        .buttonStyle(.plain)
+    }
+
+    // Couple loop: start a conversation → review patterns → last result.
+    @ViewBuilder
+    private var coupleLoop: some View {
+        NavigationLink {
+            PresenceV2SuccessDefinitionView()
+        } label: {
+            actionCard(
+                eyebrow: "Start a conversation",
+                title: "Set one shared goal, then let Presence listen.",
+                detail: "Define what success looks like for this conversation first."
+            )
+        }
+        .buttonStyle(.plain)
+
+        NavigationLink {
+            PresenceV2WorkOnView()
+        } label: {
+            secondaryActionRow(title: "What should we work on?",
+                               subtitle: "Look back at the patterns worth focusing on next.",
+                               systemImage: "chart.line.uptrend.xyaxis")
+        }
+        .buttonStyle(.plain)
+
+        reviewLastResultRow
     }
 
     @MainActor
@@ -216,45 +263,7 @@ private struct PresenceV2HomeView: View {
         }
     }
 
-    // The single up-front choice: Just me vs With my partner. Switching swaps which
-    // mode's actions are visible, so only one path competes for attention at a time.
-    private var audienceToggle: some View {
-        HStack(spacing: 0) {
-            ForEach(HomeAudience.allCases) { option in
-                let selected = option == audience
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { audience = option }
-                } label: {
-                    Text(option.label)
-                        .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .foregroundStyle(selected ? theme.primaryText : theme.secondaryText)
-                        .background(
-                            selected ? Color.white.opacity(0.95) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(4)
-        .background(Color.white.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(theme.border.opacity(0.6), lineWidth: 1)
-        )
-    }
-
-    // One-line orientation for the selected mode.
-    private func modeDescriptor(_ text: String) -> some View {
-        Text(text)
-            .font(.system(.subheadline, design: theme.bodyDesign))
-            .foregroundStyle(theme.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    // Compact, lower-weight row for secondary (couples) actions — establishes a clear
+    // Compact, lower-weight row for secondary actions — establishes a clear
     // hierarchy beneath the primary solo card.
     private func secondaryActionRow(title: String, subtitle: String, systemImage: String) -> some View {
         HStack(spacing: 14) {
@@ -2156,6 +2165,49 @@ private actor PresenceV2BackendClient {
         }
     }
 
+    // Feature-test telemetry — fire-and-forget one-tap signals (docs/v3-mvp-feature-tests.md).
+    func logEvent(userID: String, reflectionID: String?, kind: String, value: String?) async {
+        let urlString = PresenceV2BackendConfig.eventsURLString
+        guard !urlString.isEmpty, let url = URL(string: urlString) else { return }
+        var body: [String: Any] = ["user_id": userID, "kind": kind]
+        if let reflectionID { body["reflection_id"] = reflectionID }
+        if let value { body["value"] = value }
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = data
+        _ = try? await session.data(for: request)
+    }
+
+    func fetchThemes(userID: String) async -> Result<PresenceThemesResponse, Error> {
+        let urlString = PresenceV2BackendConfig.themesURLString(userID: userID)
+        guard !urlString.isEmpty, let url = URL(string: urlString) else {
+            return .failure(BackendError.notConfigured)
+        }
+        do {
+            let (data, response) = try await withRetry { try await session.data(from: url) }
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                throw BackendError.badResponse
+            }
+            return .success(try JSONDecoder().decode(PresenceThemesResponse.self, from: data))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    func fetchFollowups(userID: String) async -> [PresenceFollowup] {
+        let urlString = PresenceV2BackendConfig.followupsURLString(userID: userID)
+        guard !urlString.isEmpty, let url = URL(string: urlString) else { return [] }
+        do {
+            let (data, response) = try await withRetry { try await session.data(from: url) }
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { return [] }
+            return (try? JSONDecoder().decode(PresenceFollowupList.self, from: data))?.due ?? []
+        } catch {
+            return []
+        }
+    }
+
     func fetchLatest() async -> Result<PresenceV2AnalysisResponse, Error> {
         let latest = PresenceV2BackendConfig.latestURLString
         guard !latest.isEmpty, let url = URL(string: latest) else {
@@ -2909,9 +2961,12 @@ private struct PresenceSoloProcessingView: View {
 private struct PresenceSoloResultView: View {
     @EnvironmentObject private var themeStore: ThemeStore
     let reflection: PresenceSoloResponse
-    @State private var feedbackOutcome: String?
+    @State private var helpedTap: String?
+    @State private var trueTap: String?
+    @State private var responseUse: String?
 
     private var theme: PresenceTheme { themeStore.current }
+    private var userID: String { PresenceSoloIdentity.userID }
 
     var body: some View {
         ScrollView {
@@ -2932,8 +2987,9 @@ private struct PresenceSoloResultView: View {
                 translationCard
                 if !reflection.yourPart.isEmpty { yourPartCard }
                 suggestedNextCard
+                responseUseRow
                 if let reframe = reflection.reframe, !reframe.isEmpty { reframeCard(reframe) }
-                usefulnessSection
+                signalsSection
             }
             .padding(20)
         }
@@ -3009,22 +3065,48 @@ private struct PresenceSoloResultView: View {
         }
     }
 
-    private var usefulnessSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            cardTitle("Did this help?")
-            if let outcome = feedbackOutcome {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(theme.accentSuccess)
-                    Text(outcome == "yes" ? "Glad it helped." : outcome == "somewhat" ? "Thanks — we'll keep improving." : "Noted. That matters.")
-                        .font(.system(.subheadline, design: theme.bodyDesign))
-                        .foregroundStyle(theme.secondaryText)
-                }
+    // Scaffold-not-script signal (feature test 2): own words vs as-is.
+    private var responseUseRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            cardEyebrow("When you reach out")
+            if let use = responseUse {
+                Text(use == "own_words" ? "In your own words — that's the idea." : "Noted.")
+                    .font(.system(.subheadline, design: theme.bodyDesign))
+                    .foregroundStyle(theme.secondaryText)
             } else {
                 HStack(spacing: 10) {
-                    feedbackButton(label: "Yes", outcome: "yes", color: theme.accentSuccess)
-                    feedbackButton(label: "Somewhat", outcome: "somewhat", color: theme.accentStrong)
-                    feedbackButton(label: "Not really", outcome: "no", color: theme.accentWarm)
+                    pillButton("I'll use my own words", color: theme.accentSuccess) {
+                        responseUse = "own_words"; logEvent("response_use", "own_words")
+                    }
+                    pillButton("Use it as-is", color: theme.accentStrong) {
+                        responseUse = "verbatim"; logEvent("response_use", "verbatim")
+                    }
                 }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(Color.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(theme.border.opacity(0.7), lineWidth: 1))
+    }
+
+    // Feature test 1: did it help + did it name something true.
+    private var signalsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            signalQuestion(title: "Did this help you understand them?", tap: helpedTap) { v in
+                helpedTap = v
+                logEvent("helped", v)
+                // keep the north-star usefulness signal too
+                Task {
+                    await PresenceV2BackendClient.shared.submitFeedback(
+                        sessionID: reflection.reflectionID, outcome: v,
+                        model: reflection.model, confidence: reflection.confidence)
+                }
+            }
+            Divider().overlay(theme.border.opacity(0.5))
+            signalQuestion(title: "Did it name something true about them?", tap: trueTap) { v in
+                trueTap = v
+                logEvent("true_about_them", v)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3033,18 +3115,25 @@ private struct PresenceSoloResultView: View {
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.border.opacity(0.84), lineWidth: 1))
     }
 
-    private func feedbackButton(label: String, outcome: String, color: Color) -> some View {
-        Button {
-            feedbackOutcome = outcome
-            Task {
-                await PresenceV2BackendClient.shared.submitFeedback(
-                    sessionID: reflection.reflectionID,
-                    outcome: outcome,
-                    model: reflection.model,
-                    confidence: reflection.confidence
-                )
+    private func signalQuestion(title: String, tap: String?, onTap: @escaping (String) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            cardTitle(title)
+            if let tap {
+                Text(tap == "yes" ? "Glad it landed." : tap == "somewhat" ? "Thanks — noted." : "Noted. That matters.")
+                    .font(.system(.subheadline, design: theme.bodyDesign))
+                    .foregroundStyle(theme.secondaryText)
+            } else {
+                HStack(spacing: 10) {
+                    pillButton("Yes", color: theme.accentSuccess) { onTap("yes") }
+                    pillButton("Somewhat", color: theme.accentStrong) { onTap("somewhat") }
+                    pillButton("Not really", color: theme.accentWarm) { onTap("no") }
+                }
             }
-        } label: {
+        }
+    }
+
+    private func pillButton(_ label: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             Text(label)
                 .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
                 .padding(.horizontal, 14)
@@ -3055,6 +3144,13 @@ private struct PresenceSoloResultView: View {
                 .foregroundStyle(color)
         }
         .buttonStyle(.plain)
+    }
+
+    private func logEvent(_ kind: String, _ value: String) {
+        Task {
+            await PresenceV2BackendClient.shared.logEvent(
+                userID: userID, reflectionID: reflection.reflectionID, kind: kind, value: value)
+        }
     }
 
     @ViewBuilder
@@ -3081,5 +3177,315 @@ private struct PresenceSoloResultView: View {
             .font(.system(.subheadline, design: theme.bodyDesign))
             .foregroundStyle(theme.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Feature-test instrumentation: themes + follow-up (docs/v3-mvp-feature-tests.md)
+
+private struct PresenceThemesResponse: Decodable {
+    let sessionCount: Int
+    let needsMore: Bool
+    let message: String?
+    let headline: String?
+    let recurringNeed: String?
+    let pattern: String?
+    let improving: String?
+    let model: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionCount = "session_count"
+        case needsMore = "needs_more"
+        case message, headline
+        case recurringNeed = "recurring_need"
+        case pattern, improving, model
+    }
+}
+
+private struct PresenceFollowup: Decodable, Identifiable {
+    let reflectionID: String
+    let mode: String
+    let headline: String
+    let suggestedNext: String
+    var id: String { reflectionID }
+
+    enum CodingKeys: String, CodingKey {
+        case reflectionID = "reflection_id"
+        case mode, headline
+        case suggestedNext = "suggested_next"
+    }
+}
+
+private struct PresenceFollowupList: Decodable {
+    let due: [PresenceFollowup]
+}
+
+// "What keeps coming up" — the recurring-theme thread (feature test 3) + fake-door probe (test 7).
+private struct PresenceSoloThemesView: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @State private var themes: PresenceThemesResponse?
+    @State private var isLoading = true
+    @State private var ringsTrue: String?
+    @State private var paywallTapped = false
+
+    private var theme: PresenceTheme { themeStore.current }
+    private var userID: String { PresenceSoloIdentity.userID }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("What keeps coming up")
+                    .font(.system(size: 28, weight: .bold, design: theme.displayDesign))
+                    .foregroundStyle(theme.primaryText)
+
+                NavigationLink {
+                    PresenceSoloFollowupView()
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle").foregroundStyle(theme.accentStrong)
+                        Text("How did it go? Check in on something you tried.")
+                            .font(.system(.subheadline, design: theme.bodyDesign))
+                            .foregroundStyle(theme.primaryText)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(Color.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.border.opacity(0.7), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+
+                if isLoading {
+                    HStack(spacing: 10) {
+                        ProgressView().tint(theme.accentSuccess)
+                        Text("Looking across your reflections…")
+                            .font(.system(.subheadline, design: theme.bodyDesign))
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                } else if let t = themes, !t.needsMore {
+                    themeCard(t)
+                    ringsTrueRow
+                    paywallRow
+                } else {
+                    emptyState(count: themes?.sessionCount ?? 0)
+                }
+            }
+            .padding(20)
+        }
+        .background(InsightBackdrop(theme: theme).ignoresSafeArea())
+        .navigationTitle("Patterns")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .task {
+            guard isLoading else { return }
+            let result = await PresenceV2BackendClient.shared.fetchThemes(userID: userID)
+            if case .success(let r) = result { themes = r }
+            isLoading = false
+        }
+    }
+
+    private func themeCard(_ t: PresenceThemesResponse) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(t.headline ?? "")
+                .font(.system(size: 22, weight: .semibold, design: theme.displayDesign))
+                .foregroundStyle(theme.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if let need = t.recurringNeed, !need.isEmpty { labeled("The need underneath", need) }
+            if let p = t.pattern, !p.isEmpty { labeled("When it shows up", p) }
+            if let imp = t.improving, !imp.isEmpty { labeled("What's improving", imp) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(Color.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.border.opacity(0.84), lineWidth: 1))
+    }
+
+    private func labeled(_ label: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(.caption, design: theme.bodyDesign).weight(.bold))
+                .foregroundStyle(theme.accentSuccess).textCase(.uppercase).tracking(0.6)
+            Text(text)
+                .font(.system(.subheadline, design: theme.bodyDesign))
+                .foregroundStyle(theme.secondaryText).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var ringsTrueRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Does this ring true?")
+                .font(.system(.headline, design: theme.bodyDesign)).foregroundStyle(theme.primaryText)
+            if let r = ringsTrue {
+                Text(r == "yes" ? "Thanks — that helps Presence get you right." : "Noted — we'll keep listening.")
+                    .font(.system(.subheadline, design: theme.bodyDesign)).foregroundStyle(theme.secondaryText)
+            } else {
+                HStack(spacing: 10) {
+                    pill("Yes", theme.accentSuccess) { ringsTrue = "yes"; log("rings_true", "yes") }
+                    pill("Not quite", theme.accentWarm) { ringsTrue = "no"; log("rings_true", "no") }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(18)
+        .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.border.opacity(0.84), lineWidth: 1))
+    }
+
+    // Fake-door price probe — measures intent, ships nothing yet.
+    private var paywallRow: some View {
+        Button {
+            paywallTapped = true
+            log("paywall_intent", "clicked")
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles").foregroundStyle(theme.accentStrong)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(paywallTapped ? "Thanks — we'll let you know when it's ready." : "See your full patterns over time")
+                        .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                        .foregroundStyle(theme.primaryText)
+                    if !paywallTapped {
+                        Text("Presence Plus · coming soon")
+                            .font(.system(.footnote, design: theme.bodyDesign)).foregroundStyle(theme.secondaryText)
+                    }
+                }
+                Spacer()
+            }
+            .padding(16)
+            .background(theme.accentStrong.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(theme.accentStrong.opacity(0.25), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(paywallTapped)
+    }
+
+    private func emptyState(count: Int) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: "clock.badge.questionmark")
+                .font(.system(size: 32, weight: .light)).foregroundStyle(theme.accentSuccess.opacity(0.7))
+            Text("Not enough yet.")
+                .font(.system(size: 20, weight: .bold, design: theme.displayDesign)).foregroundStyle(theme.primaryText)
+            Text("After a few reflections, Presence will surface what keeps coming up for you. You have \(count) so far.")
+                .font(.system(.subheadline, design: theme.bodyDesign)).foregroundStyle(theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(22)
+        .background(Color.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(theme.border.opacity(0.84), lineWidth: 1))
+    }
+
+    private func pill(_ label: String, _ color: Color, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                .padding(.horizontal, 14).padding(.vertical, 10).frame(maxWidth: .infinity)
+                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(color.opacity(0.3), lineWidth: 1))
+                .foregroundStyle(color)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func log(_ kind: String, _ value: String) {
+        Task { await PresenceV2BackendClient.shared.logEvent(userID: userID, reflectionID: nil, kind: kind, value: value) }
+    }
+}
+
+// "How did it go?" — the 24–48h behaviour-change follow-up loop (feature test 2 + 5).
+private struct PresenceSoloFollowupView: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @State private var items: [PresenceFollowup] = []
+    @State private var isLoading = true
+    @State private var tried: [String: String] = [:]
+    @State private var done: Set<String> = []
+
+    private var theme: PresenceTheme { themeStore.current }
+    private var userID: String { PresenceSoloIdentity.userID }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("How did it go?")
+                    .font(.system(size: 28, weight: .bold, design: theme.displayDesign))
+                    .foregroundStyle(theme.primaryText)
+
+                if isLoading {
+                    ProgressView().tint(theme.accentSuccess)
+                } else if items.isEmpty {
+                    Text("Nothing to check in on right now.")
+                        .font(.system(.subheadline, design: theme.bodyDesign)).foregroundStyle(theme.secondaryText)
+                } else {
+                    ForEach(items) { item in followupCard(item) }
+                }
+            }
+            .padding(20)
+        }
+        .background(InsightBackdrop(theme: theme).ignoresSafeArea())
+        .navigationTitle("Check in")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .task {
+            guard isLoading else { return }
+            items = await PresenceV2BackendClient.shared.fetchFollowups(userID: userID)
+            isLoading = false
+        }
+    }
+
+    private func followupCard(_ item: PresenceFollowup) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(item.headline)
+                .font(.system(.headline, design: theme.bodyDesign)).foregroundStyle(theme.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if !item.suggestedNext.isEmpty {
+                Text("\"\(item.suggestedNext)\"")
+                    .font(.system(.subheadline, design: theme.bodyDesign)).foregroundStyle(theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if done.contains(item.id) {
+                Label("Thanks — that helps.", systemImage: "checkmark.circle.fill")
+                    .font(.system(.subheadline, design: theme.bodyDesign)).foregroundStyle(theme.accentSuccess)
+            } else if tried[item.id] == "yes" {
+                Text("How did it go?")
+                    .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold)).foregroundStyle(theme.primaryText)
+                HStack(spacing: 10) {
+                    pill("Better", theme.accentSuccess) { log(item, "went_better", "yes"); finish(item) }
+                    pill("Same", theme.accentStrong) { log(item, "went_better", "somewhat"); finish(item) }
+                    pill("Not better", theme.accentWarm) { log(item, "went_better", "no"); finish(item) }
+                }
+            } else {
+                Text("Did you try it?")
+                    .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold)).foregroundStyle(theme.primaryText)
+                HStack(spacing: 10) {
+                    pill("Yes", theme.accentSuccess) { tried[item.id] = "yes"; log(item, "tried_it", "yes") }
+                    pill("Not yet", theme.accentWarm) { tried[item.id] = "no"; log(item, "tried_it", "no"); done.insert(item.id) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(18)
+        .background(Color.white.opacity(0.74), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.border.opacity(0.84), lineWidth: 1))
+    }
+
+    private func finish(_ item: PresenceFollowup) {
+        // Trying it implies a real conversation happened — the companion-drift guardrail (test 5).
+        log(item, "had_real_conversation", "yes")
+        done.insert(item.id)
+    }
+
+    private func pill(_ label: String, _ color: Color, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                .padding(.horizontal, 14).padding(.vertical, 10).frame(maxWidth: .infinity)
+                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(color.opacity(0.3), lineWidth: 1))
+                .foregroundStyle(color)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func log(_ item: PresenceFollowup, _ kind: String, _ value: String) {
+        Task { await PresenceV2BackendClient.shared.logEvent(userID: userID, reflectionID: item.reflectionID, kind: kind, value: value) }
     }
 }
