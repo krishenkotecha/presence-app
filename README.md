@@ -53,6 +53,8 @@ Current v2 backend contract:
 - [v3-scale-thesis.md](docs/v3-scale-thesis.md) — path to a billion-dollar product (phased, gated by the validation test)
 - [v3-validation-plan.md](docs/v3-validation-plan.md) — the sharpest test: randomized, two-sided, behavioral RCT
 - [v3-mvp-feature-tests.md](docs/v3-mvp-feature-tests.md) — tactical: features → one-tap signals → pass bars (built + tested)
+- [v3-conversation-infra.md](docs/v3-conversation-infra.md) — git-like conversation graph, deeper telemetry, discovery resources (built + tested)
+- [v3-context-graph.md](docs/v3-context-graph.md) — internal social-context graph + scouting report ("good at X, needs work on Y") (built + tested)
 - [collaboration-setup.md](docs/collaboration-setup.md)
 
 The current v2 product now has two output surfaces:
