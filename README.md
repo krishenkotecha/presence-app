@@ -46,11 +46,13 @@ Current v2 backend contract:
 - [v2-strategy-7-powers.md](docs/v2-strategy-7-powers.md) — Helmer 7 Powers strategy / moat plan
 - [v2-pivot-options.md](docs/v2-pivot-options.md) — adoption pivots + expanded-utility plan
 - [v2-solo-experience.md](docs/v2-solo-experience.md) — single-user on-ramp build spec (branch-ready)
+- [v3-synthesis.md](docs/v3-synthesis.md) — **master synthesis: the whole thesis + path to a billion-dollar enterprise**
 - [v3-direction.md](docs/v3-direction.md) — core pain + v3 adds/removes, prioritized (the anchor)
 - [v3-lifecycle.md](docs/v3-lifecycle.md) — how the pain/product map from dating to long-term
 - [v3-authentic-connection.md](docs/v3-authentic-connection.md) — authentic-connection thesis + matchmaker-as-a-service
 - [v3-scale-thesis.md](docs/v3-scale-thesis.md) — path to a billion-dollar product (phased, gated by the validation test)
 - [v3-validation-plan.md](docs/v3-validation-plan.md) — the sharpest test: randomized, two-sided, behavioral RCT
+- [v3-mvp-feature-tests.md](docs/v3-mvp-feature-tests.md) — tactical: features → one-tap signals → pass bars (built + tested)
 - [collaboration-setup.md](docs/collaboration-setup.md)
 
 The current v2 product now has two output surfaces:
