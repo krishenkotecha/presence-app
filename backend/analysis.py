@@ -383,6 +383,69 @@ def _fill_reflection_defaults(body):
 
 
 # --------------------------------------------------------------------------- #
+# Recurring theme — looks ACROSS a user's reflections (the "what keeps coming up")
+# --------------------------------------------------------------------------- #
+
+THEMES_SYSTEM = FRAMEWORK + """
+
+You are looking ACROSS one person's recent solo reflections to name the ONE thing that keeps
+coming up for them. Output ONLY a JSON object (no prose, no fences, no <think>):
+{
+  "headline": str,
+  "recurring_need": str,
+  "pattern": str,
+  "improving": str
+}
+
+HARD CONSTRAINTS:
+- Describe a PATTERN OVER TIME, not a fixed type. NEVER label the person ("you are anxious",
+  "you're an avoider"). Speak to what keeps *coming up* and what is *changing* — hold the
+  possibility of growth. A fixed label is a cage.
+- "improving" must name something getting better; if you can't tell yet, give an honest,
+  encouraging note rather than inventing progress.
+- Point toward ONE small thing to keep noticing — never endless self-analysis (reflection
+  should lead outward, to action and connection, not rumination)."""
+
+THEMES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headline": {"type": "string"},
+        "recurring_need": {"type": "string"},
+        "pattern": {"type": "string"},
+        "improving": {"type": "string"},
+    },
+    "required": ["headline", "recurring_need", "pattern", "improving"],
+}
+
+
+def generate_themes(history):
+    """history: list of compact dicts {mode, headline, need} from past reflections."""
+    user = ("This person's recent reflections (most recent last):\n"
+            + json.dumps(history, indent=2)
+            + "\n\nName the ONE recurring need/theme, where it tends to show up, and what is "
+              "improving. Produce the JSON.")
+    d = _generate(THEMES_SYSTEM, user, THEMES_SCHEMA)
+    return _fill_themes_defaults(d)
+
+
+def _fill_themes_defaults(body):
+    body.setdefault("headline", "A pattern is starting to take shape.")
+    body.setdefault("recurring_need", "")
+    body.setdefault("pattern", "")
+    body.setdefault("improving", "")
+    return body
+
+
+def demo_themes():
+    return {
+        "headline": "Feeling unseen keeps coming up for you.",
+        "recurring_need": "To feel your effort is noticed before the problem-solving starts.",
+        "pattern": "It tends to show up most when plans change or when you're already tired.",
+        "improving": "You're catching it sooner than you used to — naming the feeling earlier.",
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Backend dispatch
 # --------------------------------------------------------------------------- #
 

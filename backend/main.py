@@ -121,6 +121,19 @@ def init_db():
                    payload_json TEXT
                )"""
         )
+        # One-tap signals for the MVP feature tests (see v3-mvp-feature-tests.md):
+        # helped, true_about_them, tried_it, went_better, response_use, rings_true,
+        # had_real_conversation, paywall_intent. Cheap, continuous behaviour-change telemetry.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS events (
+                   id TEXT PRIMARY KEY,
+                   user_id TEXT,
+                   reflection_id TEXT,
+                   kind TEXT,
+                   value TEXT,
+                   created_at TEXT
+               )"""
+        )
         # Migrate older DBs: tie each usefulness signal to the model + confidence
         # that produced the insight, so we can learn what actually helps.
         existing = {r["name"] for r in conn.execute("PRAGMA table_info(nudge_actions)")}
@@ -414,6 +427,135 @@ def delete_reflection(reflection_id: str):
     return {"deleted": reflection_id}
 
 
+@app.get("/api/v1/reflections/themes")
+def reflection_themes(user_id: str = "anon"):
+    """The recurring-theme thread: what keeps coming up across a user's reflections.
+    Needs >= 3 reflections; otherwise returns needs_more so the app shows an honest empty state."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT mode, payload_json FROM reflections WHERE user_id=? ORDER BY created_at ASC",
+            (user_id,),
+        ).fetchall()
+    count = len(rows)
+    if count < 3:
+        return {"user_id": user_id, "session_count": count, "needs_more": True,
+                "message": "After a few reflections, Presence will surface what keeps coming up."}
+
+    history = []
+    for r in rows:
+        p = json.loads(r["payload_json"])
+        history.append({
+            "mode": r["mode"],
+            "headline": p.get("summary", {}).get("headline"),
+            "need": p.get("translation", {}).get("their_possible_need"),
+        })
+
+    if analysis.BACKEND == "mock":
+        body, model_label = analysis.demo_themes(), "demo"
+    else:
+        try:
+            body, model_label = analysis.generate_themes(history), analysis.MODEL
+        except Exception:  # noqa: BLE001 — degrade to demo so the view still works
+            body, model_label = analysis.demo_themes(), "demo"
+
+    return {"user_id": user_id, "session_count": count, "needs_more": False,
+            "model": model_label, **body}
+
+
+@app.get("/api/v1/reflections/followups")
+def reflection_followups(user_id: str = "anon", older_than_hours: int = 24):
+    """Reflections old enough to ask 'did you try it?' that don't yet have a tried_it event.
+    Drives the 24-48h behaviour-change follow-up (feature test 2)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT reflection_id, mode, created_at, payload_json
+                 FROM reflections r
+                WHERE r.user_id=? AND r.created_at <= ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM events e
+                       WHERE e.reflection_id = r.reflection_id AND e.kind = 'tried_it')
+                ORDER BY r.created_at DESC LIMIT 10""",
+            (user_id, cutoff),
+        ).fetchall()
+    due = []
+    for r in rows:
+        p = json.loads(r["payload_json"])
+        due.append({"reflection_id": r["reflection_id"], "mode": r["mode"],
+                    "created_at": r["created_at"],
+                    "headline": p.get("summary", {}).get("headline", ""),
+                    "suggested_next": p.get("suggested_next", "")})
+    return {"user_id": user_id, "due": due}
+
+
+# --------------------------------------------------------------------------- #
+# Feature-test telemetry (see v3-mvp-feature-tests.md)
+# --------------------------------------------------------------------------- #
+
+EVENT_KINDS = {
+    "helped", "true_about_them", "tried_it", "went_better",
+    "response_use", "rings_true", "had_real_conversation", "paywall_intent",
+}
+
+
+class EventRequest(BaseModel):
+    user_id: str = "anon"
+    reflection_id: Optional[str] = None
+    kind: str
+    value: Optional[str] = None     # e.g. yes|somewhat|no, own_words|verbatim, clicked|dismissed
+
+
+@app.post("/api/v1/events")
+def log_event(req: EventRequest):
+    if req.kind not in EVENT_KINDS:
+        raise HTTPException(422, f"kind must be one of {sorted(EVENT_KINDS)}")
+    eid = uuid.uuid4().hex[:12]
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO events (id, user_id, reflection_id, kind, value, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (eid, req.user_id, req.reflection_id, req.kind, req.value, now()),
+        )
+    return {"recorded": True, "id": eid, "kind": req.kind, "value": req.value}
+
+
+@app.get("/api/v1/metrics/feature-tests")
+def feature_test_metrics():
+    """Live read-out of the MVP feature tests. Leading proxies; the RCT (v3-validation-plan.md)
+    is the confirmatory version."""
+    with db() as conn:
+        def rate(kind, positive):
+            rows = conn.execute(
+                "SELECT value, COUNT(*) AS c FROM events WHERE kind=? GROUP BY value", (kind,)
+            ).fetchall()
+            total = sum(r["c"] for r in rows)
+            pos = sum(r["c"] for r in rows if r["value"] in positive)
+            return {"n": total,
+                    "rate": round(pos / total, 3) if total else None,
+                    "breakdown": {r["value"]: r["c"] for r in rows}}
+
+        reflections = conn.execute("SELECT COUNT(*) FROM reflections").fetchone()[0]
+        users = conn.execute("SELECT COUNT(DISTINCT user_id) FROM reflections").fetchone()[0]
+
+        return {
+            "reflections_total": reflections,
+            "users_total": users,
+            # test 1 — value unit
+            "test1_helped": rate("helped", {"yes"}),
+            "test1_true_about_them": rate("true_about_them", {"yes"}),
+            # test 2 — behaviour change + scaffold-not-script
+            "test2_tried_it": rate("tried_it", {"yes"}),
+            "test2_went_better": rate("went_better", {"yes"}),
+            "test2_scaffold_own_words": rate("response_use", {"own_words"}),
+            # test 3 — recurring-theme resonance
+            "test3_rings_true": rate("rings_true", {"yes"}),
+            # test 5 — companion-drift guardrail (want real conversations happening)
+            "test5_real_conversation": rate("had_real_conversation", {"yes"}),
+            # test 7 — painkiller-not-vitamin
+            "test7_paywall_intent": rate("paywall_intent", {"clicked"}),
+        }
+
+
 # --------------------------------------------------------------------------- #
 # Usefulness feedback
 # --------------------------------------------------------------------------- #
@@ -487,5 +629,9 @@ def root():
             "GET /api/v1/relationships/work-on",
             "POST /api/v1/reflections/analyze",
             "GET /api/v1/reflections/latest",
+            "GET /api/v1/reflections/themes",
+            "GET /api/v1/reflections/followups",
+            "POST /api/v1/events",
+            "GET /api/v1/metrics/feature-tests",
         ],
     }
