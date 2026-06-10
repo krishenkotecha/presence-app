@@ -46,13 +46,35 @@ private struct PresenceV2SuccessCapture {
 }
 
 private enum PresenceV2BackendConfig {
-    // Simulator: localhost works. Physical device: use Mac's LAN IP (e.g. "http://192.168.x.x:8000/...")
-    static let analyzeURLString = "http://127.0.0.1:8000/api/v1/conversations/analyze"
-    static let workOnURLString  = "http://127.0.0.1:8000/api/v1/relationships/work-on"
+    // ONE place to configure the backend.
+    // Simulator: "http://127.0.0.1:8000". Physical device: your Mac's LAN IP, e.g. "http://192.168.1.20:8000".
+    // Leave empty ("") to force the on-device demo everywhere.
+    static let baseURLString = "http://127.0.0.1:8000"
+
+    static var apiRoot: String { baseURLString.isEmpty ? "" : baseURLString + "/api/v1" }
+    static var analyzeURLString: String { apiRoot.isEmpty ? "" : apiRoot + "/conversations/analyze" }
+    static var workOnURLString: String { apiRoot.isEmpty ? "" : apiRoot + "/relationships/work-on" }
+    static var latestURLString: String { apiRoot.isEmpty ? "" : apiRoot + "/conversations/latest" }
+    // Solo (single-user) reflection — text only, no audio.
+    static var reflectURLString: String { apiRoot.isEmpty ? "" : apiRoot + "/reflections/analyze" }
+    static func feedbackURLString(sessionID: String) -> String {
+        apiRoot.isEmpty ? "" : apiRoot + "/conversations/\(sessionID)/feedback"
+    }
+}
+
+private enum HomeAudience: String, CaseIterable, Identifiable {
+    case solo, couple
+    var id: String { rawValue }
+    var label: String { self == .solo ? "Just me" : "With my partner" }
 }
 
 private struct PresenceV2HomeView: View {
     @EnvironmentObject private var themeStore: ThemeStore
+    @State private var latestAnalysis: PresenceV2AnalysisResponse?
+    @State private var isLoadingLatest = false
+    @State private var showLatest = false
+    // One explicit choice up front — who is this for — so each mode's actions show alone.
+    @State private var audience: HomeAudience = .solo
 
     private var theme: PresenceTheme {
         themeStore.current
@@ -61,63 +83,209 @@ private struct PresenceV2HomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Presence")
-                        .font(.system(.caption, design: theme.bodyDesign).weight(.bold))
+                        .font(.system(size: 14, weight: .bold, design: theme.bodyDesign))
                         .foregroundStyle(theme.accentSuccess)
                         .textCase(.uppercase)
-                        .tracking(0.8)
+                        .tracking(1.4)
 
-                    Text("A relationship mirror for the conversations that matter.")
+                    Text("Understand each other better.")
                         .font(.system(size: 32, weight: .bold, design: theme.displayDesign))
                         .foregroundStyle(theme.primaryText)
-
-                    Text("Presence sits between the two of you, listens, and helps you understand how you’re showing up together over time.")
-                        .font(.system(.subheadline, design: theme.bodyDesign))
-                        .foregroundStyle(theme.secondaryText)
-                }
-                .padding(.top, 8)
-
-                NavigationLink {
-                    PresenceV2SuccessDefinitionView()
-                } label: {
-                    actionCard(
-                        eyebrow: "Start a conversation",
-                        title: "Set one shared goal, then let Presence listen.",
-                        detail: "Before you start, define what success looks like for this conversation."
-                    )
-                }
-                .buttonStyle(.plain)
-
-                NavigationLink {
-                    PresenceV2WorkOnView()
-                } label: {
-                    actionCard(
-                        eyebrow: "What should we work on?",
-                        title: "See the one or two relationship habits worth focusing on next.",
-                        detail: "Presence turns repeated conversations into simple coaching for the two of you."
-                    )
-                }
-                .buttonStyle(.plain)
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("What this version is for")
-                        .font(.system(.headline, design: theme.bodyDesign))
-                        .foregroundStyle(theme.primaryText)
-
-                    Text("This simpler version stays strictly focused on couples: start a conversation, define success, listen, and get relationship-specific insight back.")
-                        .font(.system(.subheadline, design: theme.bodyDesign))
-                        .foregroundStyle(theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.top, 4)
+                .padding(.top, 12)
+
+                // One clear choice up front: who is this for.
+                audienceToggle
+
+                if audience == .solo {
+                    modeDescriptor("Just you. Nothing recorded, nothing shared — work through a moment in your own words.")
+
+                    NavigationLink {
+                        PresenceSoloInputView()
+                    } label: {
+                        actionCard(
+                            eyebrow: "Make sense of a moment",
+                            title: "Decode what they said, prep for a hard talk, or process what happened.",
+                            detail: "Type or speak — Presence helps you understand and respond."
+                        )
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    modeDescriptor("Sit down together. Define what success looks like, then let Presence listen.")
+
+                    NavigationLink {
+                        PresenceV2SuccessDefinitionView()
+                    } label: {
+                        actionCard(
+                            eyebrow: "Start a conversation",
+                            title: "Set one shared goal, then let Presence listen.",
+                            detail: "Define what success looks like for this conversation first."
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    NavigationLink {
+                        PresenceV2WorkOnView()
+                    } label: {
+                        secondaryActionRow(
+                            title: "What should we work on?",
+                            subtitle: "Look back at the patterns worth focusing on next.",
+                            systemImage: "chart.line.uptrend.xyaxis"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Last result — only appears when there's something to show.
+                reviewLastResultRow
             }
             .padding(20)
         }
+        .navigationDestination(isPresented: $showLatest) {
+            if let analysis = latestAnalysis {
+                PresenceV2InsightView(analysis: analysis)
+            }
+        }
+        .refreshable {
+            await loadLatest()
+        }
+        .task {
+            await loadLatest()
+        }
         .background(InsightBackdrop(theme: theme).ignoresSafeArea())
-        .navigationTitle("Presence")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    @MainActor
+    private func loadLatest() async {
+        guard !PresenceV2BackendConfig.analyzeURLString.isEmpty else { return }
+        isLoadingLatest = true
+        let result = await PresenceV2BackendClient.shared.fetchLatest()
+        if case .success(let analysis) = result {
+            latestAnalysis = analysis
+        }
+        isLoadingLatest = false
+    }
+
+    @ViewBuilder
+    private var reviewLastResultRow: some View {
+        if isLoadingLatest {
+            HStack(spacing: 12) {
+                ProgressView().tint(theme.accentSuccess).scaleEffect(0.8)
+                Text("Looking for recent sessions...")
+                    .font(.system(.footnote, design: theme.bodyDesign))
+                    .foregroundStyle(theme.secondaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .background(Color.white.opacity(0.5), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(theme.border.opacity(0.6), lineWidth: 1))
+
+        } else if let analysis = latestAnalysis {
+            Button { showLatest = true } label: {
+                HStack(spacing: 14) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Last result")
+                            .font(.system(.caption, design: theme.bodyDesign).weight(.bold))
+                            .foregroundStyle(theme.accentSuccess)
+                            .textCase(.uppercase)
+                            .tracking(0.7)
+                        Text(analysis.summary.headline)
+                            .font(.system(.subheadline, design: theme.bodyDesign).weight(.medium))
+                            .foregroundStyle(theme.primaryText)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.accentStrong)
+                }
+                .padding(18)
+                .background(theme.accentSuccess.opacity(0.07), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(theme.accentSuccess.opacity(0.22), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+
+        } else {
+            // No stored session yet — keep the home clean rather than showing a placeholder.
+            EmptyView()
+        }
+    }
+
+    // The single up-front choice: Just me vs With my partner. Switching swaps which
+    // mode's actions are visible, so only one path competes for attention at a time.
+    private var audienceToggle: some View {
+        HStack(spacing: 0) {
+            ForEach(HomeAudience.allCases) { option in
+                let selected = option == audience
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { audience = option }
+                } label: {
+                    Text(option.label)
+                        .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .foregroundStyle(selected ? theme.primaryText : theme.secondaryText)
+                        .background(
+                            selected ? Color.white.opacity(0.95) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(Color.white.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(theme.border.opacity(0.6), lineWidth: 1)
+        )
+    }
+
+    // One-line orientation for the selected mode.
+    private func modeDescriptor(_ text: String) -> some View {
+        Text(text)
+            .font(.system(.subheadline, design: theme.bodyDesign))
+            .foregroundStyle(theme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // Compact, lower-weight row for secondary (couples) actions — establishes a clear
+    // hierarchy beneath the primary solo card.
+    private func secondaryActionRow(title: String, subtitle: String, systemImage: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(theme.accentStrong)
+                .frame(width: 26)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                    .foregroundStyle(theme.primaryText)
+                Text(subtitle)
+                    .font(.system(.footnote, design: theme.bodyDesign))
+                    .foregroundStyle(theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(theme.secondaryText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(theme.border.opacity(0.7), lineWidth: 1)
+        )
     }
 
     private func actionCard(eyebrow: String, title: String, detail: String) -> some View {
@@ -162,6 +330,10 @@ private struct PresenceV2SuccessDefinitionView: View {
     @State private var partnerOneResponse: String?
     @State private var partnerTwoResponse: String?
     @State private var recordingPartner: PartnerSlot?
+    // Shown when speech capture returns empty — explicit fallback, no silent substitution
+    @State private var manualEntrySlot: PartnerSlot?
+    @State private var manualEntryText = ""
+    @FocusState private var manualEntryFocused: Bool
 
     private enum PartnerSlot: String {
         case partnerOne = "You"
@@ -301,18 +473,56 @@ private struct PresenceV2SuccessDefinitionView: View {
                 }
 
                 if !capture.transcript.isEmpty {
-                    Text("“\(capture.transcript)”")
+                    Text("\"\(capture.transcript)\"")
                         .font(.system(.subheadline, design: theme.bodyDesign).weight(.medium))
                         .foregroundStyle(theme.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                Text("Tap the mic icon again when they're done.")
+                    .font(.system(.footnote, design: theme.bodyDesign))
+                    .foregroundStyle(theme.secondaryText)
+
+            } else if manualEntrySlot == slot {
+                // Speech returned empty — show explicit text entry
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Couldn't catch that. Type it instead.")
+                        .font(.system(.footnote, design: theme.bodyDesign))
+                        .foregroundStyle(theme.accentWarm)
+
+                    TextField("What would make this feel like a good conversation?", text: $manualEntryText, axis: .vertical)
+                        .font(.system(.subheadline, design: theme.bodyDesign))
+                        .focused($manualEntryFocused)
+                        .submitLabel(.done)
+                        .onSubmit { commitManualEntry() }
+                        .padding(12)
+                        .background(Color.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .foregroundStyle(theme.primaryText)
+
+                    Button {
+                        commitManualEntry()
+                    } label: {
+                        Text("Use this")
+                            .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(theme.accentSuccess.opacity(manualEntryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.35 : 0.9))
+                    )
+                    .foregroundStyle(Color.white)
+                    .disabled(manualEntryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
             } else if let response {
-                Text("“\(response)”")
+                Text("\"\(response)\"")
                     .font(.system(.subheadline, design: theme.bodyDesign).weight(.medium))
                     .foregroundStyle(theme.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("Captured for the shared goal.")
+                Text("Captured.")
                     .font(.system(.footnote, design: theme.bodyDesign))
                     .foregroundStyle(theme.secondaryText)
             } else {
@@ -333,21 +543,27 @@ private struct PresenceV2SuccessDefinitionView: View {
     private func startCapture(for slot: PartnerSlot) {
         if recordingPartner == slot {
             let spokenText = capture.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-            let finalText = spokenText.isEmpty ? slot.seededResponse : spokenText
 
-            switch slot {
-            case .partnerOne:
-                partnerOneResponse = finalText
-            case .partnerTwo:
-                partnerTwoResponse = finalText
+            if spokenText.isEmpty {
+                // Speech came back empty — ask them to type it instead of silently substituting
+                capture.stop()
+                recordingPartner = nil
+                manualEntrySlot = slot
+                manualEntryText = ""
+                manualEntryFocused = true
+            } else {
+                switch slot {
+                case .partnerOne: partnerOneResponse = spokenText
+                case .partnerTwo: partnerTwoResponse = spokenText
+                }
+                capture.stop()
+                recordingPartner = nil
             }
-
-            capture.stop()
-            recordingPartner = nil
             return
         }
 
         guard recordingPartner == nil else { return }
+        manualEntrySlot = nil
         recordingPartner = slot
 
         Task {
@@ -356,6 +572,17 @@ private struct PresenceV2SuccessDefinitionView: View {
                 recordingPartner = nil
             }
         }
+    }
+
+    private func commitManualEntry() {
+        let text = manualEntryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let slot = manualEntrySlot else { return }
+        switch slot {
+        case .partnerOne: partnerOneResponse = text
+        case .partnerTwo: partnerTwoResponse = text
+        }
+        manualEntrySlot = nil
+        manualEntryText = ""
     }
 }
 
@@ -410,7 +637,7 @@ private struct PresenceV2ConversationView: View {
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 12)
                     } else if !monitor.transcript.isEmpty {
-                        Text("“\(monitor.transcript)”")
+                        Text("\"\(monitor.transcript)\"")
                             .font(.system(.footnote, design: theme.bodyDesign).weight(.medium))
                             .foregroundStyle(Color.white.opacity(0.9))
                             .multilineTextAlignment(.center)
@@ -463,7 +690,8 @@ private struct PresenceV2ConversationView: View {
                     participantTwoLabel: "Your partner",
                     participantOneSuccessDefinition: successCapture.participantOne,
                     participantTwoSuccessDefinition: successCapture.participantTwo,
-                    conversationAudioURL: monitor.recordedFileURL
+                    conversationAudioURL: monitor.recordedFileURL,
+                    deviceTranscript: monitor.transcript
                 )
             )
         }
@@ -641,8 +869,8 @@ private struct PresenceV2ProcessingView: View {
             switch result {
             case .success(let analysis):
                 self.analysis = analysis
-            case .failure:
-                self.errorMessage = "Backend not configured yet, so Presence is showing a local demo analysis for now."
+            case .failure(let error):
+                self.errorMessage = PresenceV2BackendClient.userMessage(for: error)
                 self.analysis = PresenceV2AnalysisResponse.mock(from: submission)
             }
             try? await Task.sleep(for: .seconds(0.8))
@@ -654,9 +882,100 @@ private struct PresenceV2ProcessingView: View {
 private struct PresenceV2InsightView: View {
     @EnvironmentObject private var themeStore: ThemeStore
     let analysis: PresenceV2AnalysisResponse
+    @State private var feedbackOutcome: String?   // "yes" | "somewhat" | "no"
+    @State private var showDetails = false
 
     private var theme: PresenceTheme {
         themeStore.current
+    }
+
+    // Shows where this analysis came from so the user can tell real model output
+    // from the on-device demo, and whether metrics were measured or estimated.
+    @ViewBuilder
+    private var sourceBanner: some View {
+        let demo = analysis.isDemo
+        let accent = demo ? theme.accentWarm : theme.accentSuccess
+        let icon = demo ? "exclamationmark.triangle.fill" : "checkmark.seal.fill"
+        let modelName = analysis.model ?? "your local model"
+        let title = demo ? "Demo analysis" : "Analyzed by " + modelName
+        let measuredDetail = analysis.metricsAreMeasured
+            ? "Word balance & interruptions were measured from speaker separation."
+            : "Word balance & interruptions were estimated by the model — enable diarization for measured values."
+        let detail = demo
+            ? (analysis.note ?? "Showing local demo data, not your conversation.")
+            : measuredDetail
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(accent)
+                Text(title)
+                    .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                    .foregroundStyle(theme.primaryText)
+                Spacer()
+                if let confidence = analysis.confidence {
+                    Text(confidence.capitalized + " confidence")
+                        .font(.system(.caption, design: theme.bodyDesign).weight(.semibold))
+                        .foregroundStyle(accent)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(accent.opacity(0.12), in: Capsule())
+                }
+            }
+
+            Text(detail)
+                .font(.system(.footnote, design: theme.bodyDesign))
+                .foregroundStyle(theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(accent.opacity(0.22), lineWidth: 1))
+    }
+
+    // Numbers + transcript, demoted into one collapsed "details" disclosure so the
+    // review leads with the human payoff (insight, quoted moments, next steps) rather
+    // than a metrics dashboard. The quoted moments — not the numbers — are the point.
+    private var detailsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { showDetails.toggle() }
+            } label: {
+                HStack {
+                    Text("Details & transcript")
+                        .font(.system(.headline, design: theme.bodyDesign))
+                        .foregroundStyle(theme.primaryText)
+                    Spacer()
+                    Image(systemName: showDetails ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.accentStrong)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if showDetails {
+                metricRow
+
+                if let transcript = analysis.transcript, !transcript.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("What Presence heard")
+                            .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                            .foregroundStyle(theme.primaryText)
+                        Text(transcript)
+                            .font(.system(.subheadline, design: theme.bodyDesign))
+                            .foregroundStyle(theme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.border.opacity(0.84), lineWidth: 1))
     }
 
     var body: some View {
@@ -673,20 +992,27 @@ private struct PresenceV2InsightView: View {
                         .font(.system(size: 30, weight: .bold, design: theme.displayDesign))
                         .foregroundStyle(theme.primaryText)
 
+                    if !analysis.summary.subheadline.isEmpty {
+                        Text(analysis.summary.subheadline)
+                            .font(.system(.body, design: theme.bodyDesign))
+                            .foregroundStyle(theme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
                     Text("\(formattedDuration) listened • analyzed against your goal for the conversation")
                         .font(.system(.subheadline, design: theme.bodyDesign))
                         .foregroundStyle(theme.secondaryText)
                 }
 
-                insightPanel(
-                    title: "Your shared definition of success",
-                    body: analysis.successDefinition.shared
-                )
-
-                metricRow
+                // Lead with the human payoff: the goal, the quoted moments, the next steps.
+                sourceBanner
+                successDefinitionPanel
                 keyMomentsSection
                 unmetNeedsSection
                 nextTimeSection
+                usefulnessSection
+                // Numbers and transcript demoted into a collapsed details section.
+                detailsSection
             }
             .padding(20)
         }
@@ -694,6 +1020,58 @@ private struct PresenceV2InsightView: View {
         .navigationTitle("Results")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
+    }
+
+    // Shows each person's original words alongside the LLM's synthesis —
+    // the mirror: what they said vs. what Presence heard across both of them.
+    private var successDefinitionPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("What success looked like for each of you")
+                .font(.system(.headline, design: theme.bodyDesign))
+                .foregroundStyle(theme.primaryText)
+
+            VStack(alignment: .leading, spacing: 10) {
+                personDefinitionRow(label: "You", text: analysis.successDefinition.participantOne)
+                personDefinitionRow(label: "Your partner", text: analysis.successDefinition.participantTwo)
+            }
+
+            Divider()
+                .overlay(theme.border.opacity(0.5))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("What Presence heard across both")
+                    .font(.system(.caption, design: theme.bodyDesign).weight(.bold))
+                    .foregroundStyle(theme.accentSuccess)
+                    .textCase(.uppercase)
+                    .tracking(0.7)
+
+                Text(analysis.successDefinition.shared)
+                    .font(.system(.subheadline, design: theme.bodyDesign).weight(.medium))
+                    .foregroundStyle(theme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(theme.border.opacity(0.84), lineWidth: 1)
+        )
+    }
+
+    private func personDefinitionRow(label: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(.caption, design: theme.bodyDesign).weight(.bold))
+                .foregroundStyle(theme.secondaryText)
+                .textCase(.uppercase)
+                .tracking(0.6)
+            Text("\"\(text)\"")
+                .font(.system(.subheadline, design: theme.bodyDesign))
+                .foregroundStyle(theme.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var metricRow: some View {
@@ -753,7 +1131,7 @@ private struct PresenceV2InsightView: View {
 
     private var unmetNeedsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("What each person needed, but didn’t get")
+            Text("What each person needed, but didn't get")
                 .font(.system(.headline, design: theme.bodyDesign))
                 .foregroundStyle(theme.primaryText)
 
@@ -767,7 +1145,7 @@ private struct PresenceV2InsightView: View {
 
     private var nextTimeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Here’s what to try next time")
+            Text("Here's what to try next time")
                 .font(.system(.headline, design: theme.bodyDesign))
                 .foregroundStyle(theme.primaryText)
 
@@ -823,8 +1201,13 @@ private struct PresenceV2InsightView: View {
     }
 
     private func keyMomentRow(moment: PresenceV2AnalysisResponse.KeyMoment) -> some View {
-        let accent = moment.type == .positive ? theme.accentSuccess : theme.accentWarm
-        let tint = moment.type == .positive ? theme.accentSuccess.opacity(0.08) : theme.accentWarm.opacity(0.09)
+        let accent: Color
+        switch moment.type {
+        case .positive: accent = theme.accentSuccess
+        case .negative: accent = theme.accentWarm
+        case .neutral:  accent = theme.accentStrong
+        }
+        let tint = accent.opacity(0.08)
 
         return HStack(alignment: .top, spacing: 14) {
             VStack(spacing: 0) {
@@ -847,7 +1230,7 @@ private struct PresenceV2InsightView: View {
                     .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
                     .foregroundStyle(theme.primaryText)
 
-                Text("“\(moment.quote)”")
+                Text("\"\(moment.quote)\"")
                     .font(.system(.subheadline, design: theme.bodyDesign).weight(.medium))
                     .foregroundStyle(theme.primaryText)
                     .padding(.top, 2)
@@ -908,6 +1291,69 @@ private struct PresenceV2InsightView: View {
         )
     }
 
+    // North-star metric: did this help you understand each other better?
+    private var usefulnessSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("One last thing")
+                .font(.system(.headline, design: theme.bodyDesign))
+                .foregroundStyle(theme.primaryText)
+
+            Text("Did this help you understand each other better?")
+                .font(.system(.subheadline, design: theme.bodyDesign))
+                .foregroundStyle(theme.secondaryText)
+
+            if let outcome = feedbackOutcome {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(theme.accentSuccess)
+                    Text(outcome == "yes" ? "Glad it helped." : outcome == "somewhat" ? "Thanks — we'll keep improving." : "Noted. That feedback matters.")
+                        .font(.system(.subheadline, design: theme.bodyDesign))
+                        .foregroundStyle(theme.secondaryText)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    feedbackButton(label: "Yes", outcome: "yes", color: theme.accentSuccess)
+                    feedbackButton(label: "Somewhat", outcome: "somewhat", color: theme.accentStrong)
+                    feedbackButton(label: "Not really", outcome: "no", color: theme.accentWarm)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(theme.border.opacity(0.84), lineWidth: 1)
+        )
+    }
+
+    private func feedbackButton(label: String, outcome: String, color: Color) -> some View {
+        Button {
+            feedbackOutcome = outcome
+            Task {
+                await PresenceV2BackendClient.shared.submitFeedback(
+                    sessionID: analysis.sessionID,
+                    outcome: outcome,
+                    model: analysis.model,
+                    confidence: analysis.confidence
+                )
+            }
+        } label: {
+            Text(label)
+                .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(color.opacity(0.3), lineWidth: 1)
+                )
+                .foregroundStyle(color)
+        }
+        .buttonStyle(.plain)
+    }
+
     private var formattedDuration: String {
         let minutes = max(1, analysis.durationSeconds / 60)
         return "\(minutes)m"
@@ -963,11 +1409,15 @@ private struct PresenceV2WorkOnView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                heroRecommendation
-                whyThisMattersSection
-                patternsSection
-                improvingSection
-                workOnListSection
+                if !isLoading && (insight.sessionCount ?? 999) < 2 {
+                    firstSessionState
+                } else {
+                    heroRecommendation
+                    whyThisMattersSection
+                    patternsSection
+                    improvingSection
+                    workOnListSection
+                }
             }
             .padding(20)
         }
@@ -981,12 +1431,42 @@ private struct PresenceV2WorkOnView: View {
             switch result {
             case .success(let response):
                 insight = response
-            case .failure:
-                errorMessage = "Backend not configured yet, so Presence is showing local relationship patterns for now."
+            case .failure(let error):
+                errorMessage = PresenceV2BackendClient.userMessage(for: error)
                 insight = .mock
             }
             isLoading = false
         }
+    }
+
+    private var firstSessionState: some View {
+        let count = insight.sessionCount ?? 0
+        let plural = count == 1 ? "" : "s"
+        return VStack(alignment: .leading, spacing: 16) {
+            Image(systemName: "clock.badge.questionmark")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(theme.accentSuccess.opacity(0.7))
+
+            Text("Not enough conversations yet.")
+                .font(.system(size: 22, weight: .bold, design: theme.displayDesign))
+                .foregroundStyle(theme.primaryText)
+
+            Text("Presence builds this view from repeated conversations. Come back after two or three sessions and it will surface what actually tends to happen between the two of you — not a demo.")
+                .font(.system(.subheadline, design: theme.bodyDesign))
+                .foregroundStyle(theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("You have \(count) conversation\(plural) recorded.")
+                .font(.system(.footnote, design: theme.bodyDesign).weight(.semibold))
+                .foregroundStyle(theme.accentSuccess)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(22)
+        .background(Color.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(theme.border.opacity(0.84), lineWidth: 1)
+        )
     }
 
     private var heroRecommendation: some View {
@@ -1046,7 +1526,7 @@ private struct PresenceV2WorkOnView: View {
 
     private var improvingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("What’s improving")
+            sectionTitle("What's improving")
 
             VStack(spacing: 10) {
                 ForEach(insight.improving) { item in
@@ -1143,6 +1623,22 @@ private struct PresenceV2WorkOnResponse: Decodable {
             case frequencyLabel = "frequency_label"
             case contextLabel = "context_label"
         }
+
+        init(title: String, summary: String, frequencyLabel: String, contextLabel: String) {
+            self.title = title
+            self.summary = summary
+            self.frequencyLabel = frequencyLabel
+            self.contextLabel = contextLabel
+        }
+
+        // Tolerate a thin model response: missing fields fall back instead of failing.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            title = (try? c.decode(String.self, forKey: .title)) ?? "Here's what's worth focusing on next."
+            summary = (try? c.decode(String.self, forKey: .summary)) ?? ""
+            frequencyLabel = (try? c.decode(String.self, forKey: .frequencyLabel)) ?? ""
+            contextLabel = (try? c.decode(String.self, forKey: .contextLabel)) ?? ""
+        }
     }
 
     struct InsightItem: Decodable, Identifiable {
@@ -1153,6 +1649,7 @@ private struct PresenceV2WorkOnResponse: Decodable {
 
     let relationshipID: String?
     let timeWindow: String?
+    let sessionCount: Int?
     let primaryFocus: PrimaryFocus
     let whyThisMatters: [InsightItem]
     let relationshipPatterns: [InsightItem]
@@ -1162,6 +1659,7 @@ private struct PresenceV2WorkOnResponse: Decodable {
     enum CodingKeys: String, CodingKey {
         case relationshipID = "relationship_id"
         case timeWindow = "time_window"
+        case sessionCount = "session_count"
         case primaryFocus = "primary_focus"
         case whyThisMatters = "why_this_matters"
         case relationshipPatterns = "relationship_patterns"
@@ -1169,9 +1667,25 @@ private struct PresenceV2WorkOnResponse: Decodable {
         case workOnAreas = "work_on_areas"
     }
 
+    // Degrade gracefully if a local model omits sections, rather than collapsing
+    // the whole longitudinal view to demo data.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        relationshipID = try? c.decode(String.self, forKey: .relationshipID)
+        timeWindow = try? c.decode(String.self, forKey: .timeWindow)
+        sessionCount = try? c.decode(Int.self, forKey: .sessionCount)
+        primaryFocus = (try? c.decode(PrimaryFocus.self, forKey: .primaryFocus))
+            ?? PresenceV2WorkOnResponse.mock.primaryFocus
+        whyThisMatters = (try? c.decode([InsightItem].self, forKey: .whyThisMatters)) ?? []
+        relationshipPatterns = (try? c.decode([InsightItem].self, forKey: .relationshipPatterns)) ?? []
+        improving = (try? c.decode([InsightItem].self, forKey: .improving)) ?? []
+        workOnAreas = (try? c.decode([InsightItem].self, forKey: .workOnAreas)) ?? []
+    }
+
     static let mock = PresenceV2WorkOnResponse(
         relationshipID: nil,
         timeWindow: "90d",
+        sessionCount: nil,
         primaryFocus: .init(
             title: "Stay with the feeling before moving into solutions.",
             summary: "The two of you tend to reconnect when the emotional part lands first. When one of you starts fixing too early, the conversation becomes more procedural and less connected.",
@@ -1239,6 +1753,7 @@ private struct PresenceV2WorkOnResponse: Decodable {
     private init(
         relationshipID: String?,
         timeWindow: String?,
+        sessionCount: Int?,
         primaryFocus: PrimaryFocus,
         whyThisMatters: [InsightItem],
         relationshipPatterns: [InsightItem],
@@ -1247,6 +1762,7 @@ private struct PresenceV2WorkOnResponse: Decodable {
     ) {
         self.relationshipID = relationshipID
         self.timeWindow = timeWindow
+        self.sessionCount = sessionCount
         self.primaryFocus = primaryFocus
         self.whyThisMatters = whyThisMatters
         self.relationshipPatterns = relationshipPatterns
@@ -1265,6 +1781,9 @@ private struct PresenceV2ConversationSubmission {
     let participantOneSuccessDefinition: String
     let participantTwoSuccessDefinition: String
     let conversationAudioURL: URL?
+    // Live on-device transcript — used by the backend as a fallback when
+    // server-side Whisper isn't installed, so analysis still works.
+    var deviceTranscript: String = ""
 }
 
 private struct PresenceV2AnalysisResponse: Decodable {
@@ -1277,6 +1796,12 @@ private struct PresenceV2AnalysisResponse: Decodable {
         let participantOne: String
         let participantTwo: String
         let shared: String
+
+        enum CodingKeys: String, CodingKey {
+            case participantOne = "participant_one"
+            case participantTwo = "participant_two"
+            case shared
+        }
     }
 
     struct Metrics: Decodable {
@@ -1284,6 +1809,12 @@ private struct PresenceV2AnalysisResponse: Decodable {
             let participantOnePercent: Int
             let participantTwoPercent: Int
             let label: String
+
+            enum CodingKeys: String, CodingKey {
+                case participantOnePercent = "participant_one_percent"
+                case participantTwoPercent = "participant_two_percent"
+                case label
+            }
         }
 
         struct Interruptions: Decodable {
@@ -1291,11 +1822,23 @@ private struct PresenceV2AnalysisResponse: Decodable {
             let participantOne: Int
             let participantTwo: Int
             let label: String
+
+            enum CodingKeys: String, CodingKey {
+                case total
+                case participantOne = "participant_one"
+                case participantTwo = "participant_two"
+                case label
+            }
         }
 
         struct ConnectionScore: Decodable {
             let score: Int
             let deltaLabel: String
+
+            enum CodingKeys: String, CodingKey {
+                case score
+                case deltaLabel = "delta_label"
+            }
         }
 
         struct RepairAttempts: Decodable {
@@ -1307,12 +1850,20 @@ private struct PresenceV2AnalysisResponse: Decodable {
         let interruptions: Interruptions
         let connectionScore: ConnectionScore
         let repairAttempts: RepairAttempts
+
+        enum CodingKeys: String, CodingKey {
+            case wordBalance    = "word_balance"
+            case interruptions
+            case connectionScore = "connection_score"
+            case repairAttempts  = "repair_attempts"
+        }
     }
 
     struct KeyMoment: Decodable, Identifiable {
         enum MomentType: String, Decodable {
             case positive
             case negative
+            case neutral
         }
 
         let id: UUID
@@ -1345,8 +1896,11 @@ private struct PresenceV2AnalysisResponse: Decodable {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             self.id = UUID()
-            self.timestampMs = try container.decode(Int.self, forKey: .timestampMs)
-            self.type = try container.decode(MomentType.self, forKey: .type)
+            self.timestampMs = (try? container.decode(Int.self, forKey: .timestampMs)) ?? 0
+            // The backend contract allows "neutral"; tolerate any unknown value
+            // rather than failing the whole response decode.
+            let rawType = (try? container.decode(String.self, forKey: .type)) ?? "neutral"
+            self.type = MomentType(rawValue: rawType) ?? .neutral
             self.title = try container.decode(String.self, forKey: .title)
             self.quote = try container.decode(String.self, forKey: .quote)
             self.speaker = try container.decode(String.self, forKey: .speaker)
@@ -1371,6 +1925,18 @@ private struct PresenceV2AnalysisResponse: Decodable {
         }
     }
 
+    // Provenance — lets the UI show whether this is real Ollama output or demo,
+    // and whether metrics were measured (diarization) vs estimated by the model.
+    struct MetricsSource: Decodable {
+        let wordBalance: String?     // "computed" | "estimated"
+        let interruptions: String?
+
+        enum CodingKeys: String, CodingKey {
+            case wordBalance = "word_balance"
+            case interruptions
+        }
+    }
+
     let sessionID: String
     let status: String
     let summary: Summary
@@ -1380,6 +1946,14 @@ private struct PresenceV2AnalysisResponse: Decodable {
     let unmetNeeds: [UnmetNeed]
     let nextTime: [NextTime]
     let durationSeconds: Int
+
+    // Optional provenance / debug fields (absent in older payloads → nil).
+    let model: String?
+    let confidence: String?
+    let diarized: Bool?
+    let metricsSource: MetricsSource?
+    let note: String?
+    let transcript: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
@@ -1391,6 +1965,22 @@ private struct PresenceV2AnalysisResponse: Decodable {
         case unmetNeeds = "unmet_needs"
         case nextTime = "next_time"
         case durationSeconds = "duration_seconds"
+        case model
+        case confidence
+        case diarized
+        case metricsSource = "metrics_source"
+        case note
+        case transcript
+    }
+
+    /// True when this came from the local demo/mock path rather than a live model.
+    var isDemo: Bool {
+        (model == nil) || (model == "demo") || (model == "mock") || (note != nil)
+    }
+
+    /// Human label for where metrics came from.
+    var metricsAreMeasured: Bool {
+        diarized == true || metricsSource?.wordBalance == "computed"
     }
 
     static func mock(from submission: PresenceV2ConversationSubmission) -> PresenceV2AnalysisResponse {
@@ -1413,19 +2003,23 @@ private struct PresenceV2AnalysisResponse: Decodable {
                 repairAttempts: .init(total: 3, label: "Two landed well")
             ),
             keyMoments: [
-                .init(timestampMs: 190000, type: .negative, title: "Tension rose", quote: "Yeah, but that’s not what I meant.", speaker: "You", explanation: "This shifted the conversation from impact to intent, which made your partner feel less met in the emotional part."),
+                .init(timestampMs: 190000, type: .negative, title: "Tension rose", quote: "Yeah, but that's not what I meant.", speaker: "You", explanation: "This shifted the conversation from impact to intent, which made your partner feel less met in the emotional part."),
                 .init(timestampMs: 525000, type: .positive, title: "Connection improved", quote: "I can see why that felt lonely.", speaker: "You", explanation: "This was the first moment the feeling landed before the problem got solved, and the conversation softened immediately."),
-                .init(timestampMs: 680000, type: .positive, title: "You got back on track", quote: "What I actually need is to feel like we’re on the same side.", speaker: "Your partner", explanation: "Once the underlying need was named directly, the conversation stopped circling and became more collaborative.")
+                .init(timestampMs: 680000, type: .positive, title: "You got back on track", quote: "What I actually need is to feel like we're on the same side.", speaker: "Your partner", explanation: "Once the underlying need was named directly, the conversation stopped circling and became more collaborative.")
             ],
             unmetNeeds: [
-                .init(person: "You", need: "Reassurance that the conversation wasn’t becoming a character judgment."),
+                .init(person: "You", need: "Reassurance that the conversation wasn't becoming a character judgment."),
                 .init(person: "Your partner", need: "A clearer sign that the emotional part landed before the problem-solving started.")
             ],
             nextTime: [
                 .init(person: "For you", tryNext: "Before explaining your intent, reflect back the feeling you think you heard in one sentence."),
                 .init(person: "For your partner", tryNext: "Name the underlying need earlier, before the conversation gets pulled into logistics.")
             ],
-            durationSeconds: submission.durationSeconds
+            durationSeconds: submission.durationSeconds,
+            model: "demo",
+            confidence: "low",
+            diarized: false,
+            note: "On-device demo analysis — the server wasn't reachable, so this isn't from your conversation."
         )
     }
 
@@ -1438,7 +2032,13 @@ private struct PresenceV2AnalysisResponse: Decodable {
         keyMoments: [KeyMoment],
         unmetNeeds: [UnmetNeed],
         nextTime: [NextTime],
-        durationSeconds: Int
+        durationSeconds: Int,
+        model: String? = nil,
+        confidence: String? = nil,
+        diarized: Bool? = nil,
+        metricsSource: MetricsSource? = nil,
+        note: String? = nil,
+        transcript: String? = nil
     ) {
         self.sessionID = sessionID
         self.status = status
@@ -1449,6 +2049,12 @@ private struct PresenceV2AnalysisResponse: Decodable {
         self.unmetNeeds = unmetNeeds
         self.nextTime = nextTime
         self.durationSeconds = durationSeconds
+        self.model = model
+        self.confidence = confidence
+        self.diarized = diarized
+        self.metricsSource = metricsSource
+        self.note = note
+        self.transcript = transcript
     }
 }
 
@@ -1460,6 +2066,32 @@ private actor PresenceV2BackendClient {
         encoder.dateEncodingStrategy = .iso8601
         return encoder
     }()
+
+    // The first Ollama call after a cold load can take a while, so we give
+    // requests a generous timeout rather than the 60s default.
+    private let session: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 120
+        cfg.timeoutIntervalForResource = 180
+        cfg.waitsForConnectivity = true
+        return URLSession(configuration: cfg)
+    }()
+
+    // Retry only transient transport errors. analyze is keyed by session_id with
+    // INSERT OR REPLACE server-side, so retries are idempotent.
+    private func withRetry<T>(attempts: Int = 2, _ op: () async throws -> T) async throws -> T {
+        var lastError: Error?
+        for attempt in 0..<max(1, attempts) {
+            do {
+                return try await op()
+            } catch let error as URLError where
+                [.timedOut, .networkConnectionLost, .cannotConnectToHost].contains(error.code) {
+                lastError = error
+                if attempt < attempts - 1 { try? await Task.sleep(for: .seconds(1)) }
+            }
+        }
+        throw lastError ?? BackendError.badResponse
+    }
 
     func analyze(submission: PresenceV2ConversationSubmission) async -> Result<PresenceV2AnalysisResponse, Error> {
         guard let url = URL(string: PresenceV2BackendConfig.analyzeURLString), !PresenceV2BackendConfig.analyzeURLString.isEmpty else {
@@ -1477,7 +2109,9 @@ private actor PresenceV2BackendClient {
             request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
             let body = try buildMultipartBody(submission: submission, audioURL: audioURL, boundary: boundary)
-            let (data, response) = try await URLSession.shared.upload(for: request, from: body)
+            let (data, response) = try await withRetry {
+                try await session.upload(for: request, from: body)
+            }
 
             guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
                 throw BackendError.badResponse
@@ -1486,19 +2120,82 @@ private actor PresenceV2BackendClient {
             let analysis = try JSONDecoder().decode(PresenceV2AnalysisResponse.self, from: data)
             return .success(analysis)
         } catch {
+            print("[Presence] analyze failed:", error)
             return .failure(error)
         }
     }
 
+    // Solo single-user reflection: JSON POST (no audio), text only.
+    func reflect(submission: PresenceSoloSubmission) async -> Result<PresenceSoloResponse, Error> {
+        let urlString = PresenceV2BackendConfig.reflectURLString
+        guard !urlString.isEmpty, let url = URL(string: urlString) else {
+            return .failure(BackendError.notConfigured)
+        }
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let payload = PresenceSoloRequestBody(
+                reflection_id: submission.reflectionID,
+                user_id: submission.userID,
+                mode: submission.mode,
+                text: submission.text,
+                quote: submission.quote
+            )
+            request.httpBody = try JSONEncoder().encode(payload)
+
+            let (data, response) = try await withRetry { try await session.data(for: request) }
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                throw BackendError.badResponse
+            }
+            let reflection = try JSONDecoder().decode(PresenceSoloResponse.self, from: data)
+            return .success(reflection)
+        } catch {
+            print("[Presence] reflect failed:", error)
+            return .failure(error)
+        }
+    }
+
+    func fetchLatest() async -> Result<PresenceV2AnalysisResponse, Error> {
+        let latest = PresenceV2BackendConfig.latestURLString
+        guard !latest.isEmpty, let url = URL(string: latest) else {
+            return .failure(BackendError.notConfigured)
+        }
+        do {
+            let (data, response) = try await withRetry { try await session.data(from: url) }
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                throw BackendError.badResponse
+            }
+            let analysis = try JSONDecoder().decode(PresenceV2AnalysisResponse.self, from: data)
+            return .success(analysis)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    func submitFeedback(sessionID: String, outcome: String, model: String?, confidence: String?) async {
+        let feedback = PresenceV2BackendConfig.feedbackURLString(sessionID: sessionID)
+        guard !feedback.isEmpty, var components = URLComponents(string: feedback) else { return }
+        var items = [URLQueryItem(name: "outcome", value: outcome)]
+        if let model { items.append(URLQueryItem(name: "model", value: model)) }
+        if let confidence { items.append(URLQueryItem(name: "confidence", value: confidence)) }
+        components.queryItems = items
+        guard let url = components.url else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        _ = try? await session.data(for: request)
+    }
+
     func fetchWorkOn() async -> Result<PresenceV2WorkOnResponse, Error> {
-        guard let url = URL(string: PresenceV2BackendConfig.workOnURLString), !PresenceV2BackendConfig.workOnURLString.isEmpty else {
+        let workOnURL = PresenceV2BackendConfig.workOnURLString
+        guard !workOnURL.isEmpty, let url = URL(string: workOnURL) else {
             return .failure(BackendError.notConfigured)
         }
 
         do {
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await withRetry { try await session.data(for: request) }
 
             guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
                 throw BackendError.badResponse
@@ -1507,6 +2204,7 @@ private actor PresenceV2BackendClient {
             let workOn = try JSONDecoder().decode(PresenceV2WorkOnResponse.self, from: data)
             return .success(workOn)
         } catch {
+            print("[Presence] work-on failed:", error)
             return .failure(error)
         }
     }
@@ -1529,11 +2227,14 @@ private actor PresenceV2BackendClient {
         appendField(name: "participant_one_success_definition", value: submission.participantOneSuccessDefinition)
         appendField(name: "participant_two_success_definition", value: submission.participantTwoSuccessDefinition)
         appendField(name: "prototype_track", value: "v2")
+        if !submission.deviceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            appendField(name: "device_transcript", value: submission.deviceTranscript)
+        }
 
         let fileData = try Data(contentsOf: audioURL)
         data.append("--\(boundary)\r\n".data(using: .utf8)!)
-        data.append("Content-Disposition: form-data; name=\"conversation_audio\"; filename=\"conversation.caf\"\r\n".data(using: .utf8)!)
-        data.append("Content-Type: audio/x-caf\r\n\r\n".data(using: .utf8)!)
+        data.append("Content-Disposition: form-data; name=\"conversation_audio\"; filename=\"conversation.m4a\"\r\n".data(using: .utf8)!)
+        data.append("Content-Type: audio/mp4\r\n\r\n".data(using: .utf8)!)
         data.append(fileData)
         data.append("\r\n".data(using: .utf8)!)
         data.append("--\(boundary)--\r\n".data(using: .utf8)!)
@@ -1546,6 +2247,29 @@ private actor PresenceV2BackendClient {
         case missingAudio
         case badResponse
     }
+
+    /// Maps a backend failure to a message that tells the truth about what happened,
+    /// so a transport/decode failure isn't reported as "backend not configured".
+    static func userMessage(for error: Error) -> String {
+        if let backendError = error as? BackendError {
+            switch backendError {
+            case .notConfigured:
+                return "No backend URL is set, so Presence is showing a local demo for now."
+            case .missingAudio:
+                return "No audio was captured for this session — showing a local demo."
+            case .badResponse:
+                return "The analysis server returned an error. Showing a local demo while it's unavailable."
+            }
+        }
+        if error is DecodingError {
+            return "Presence reached the server but couldn't read its response (format mismatch). Showing a local demo."
+        }
+        let urlError = error as? URLError
+        if urlError?.code == .cannotConnectToHost || urlError?.code == .timedOut || urlError?.code == .networkConnectionLost {
+            return "Couldn't reach the analysis server. Is it running and on the same network? Showing a local demo."
+        }
+        return "Couldn't complete analysis (\(error.localizedDescription)). Showing a local demo."
+    }
 }
 
 @MainActor
@@ -1553,6 +2277,7 @@ private final class PresenceSpeechCaptureManager: NSObject, ObservableObject {
     @Published var transcript = ""
     @Published var isRecording = false
     @Published var permissionMessage: String?
+    @Published var audioLevel: Float = 0   // smoothed RMS 0–1
 
     private let audioEngine = AVAudioEngine()
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -1571,7 +2296,7 @@ private final class PresenceSpeechCaptureManager: NSObject, ObservableObject {
             try configureAndStart()
             return true
         } catch {
-            permissionMessage = "Presence couldn’t start the microphone right now."
+            permissionMessage = "Presence couldn't start the microphone right now."
             stop()
             return false
         }
@@ -1636,13 +2361,26 @@ private final class PresenceSpeechCaptureManager: NSObject, ObservableObject {
         inputNode.removeTap(onBus: 0)
 
         if let recordedFileURL {
-            audioFile = try AVAudioFile(forWriting: recordedFileURL, settings: format.settings)
+            // Encode to AAC/m4a on write so LAN uploads are a fraction of raw LPCM/CAF.
+            // Writing PCM tap buffers to an AAC-configured AVAudioFile converts them.
+            let aacSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: format.sampleRate,
+                AVNumberOfChannelsKey: Int(format.channelCount),
+                AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue
+            ]
+            audioFile = try AVAudioFile(forWriting: recordedFileURL, settings: aacSettings)
         }
 
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self else { return }
             self.recognitionRequest?.append(buffer)
             try? self.audioFile?.write(from: buffer)
+            let rms = Self.rmsLevel(buffer)
+            Task { @MainActor in
+                // Exponential smoothing so the colour doesn't jitter
+                self.audioLevel = self.audioLevel * 0.7 + rms * 0.3
+            }
         }
 
         audioEngine.prepare()
@@ -1669,7 +2407,18 @@ private final class PresenceSpeechCaptureManager: NSObject, ObservableObject {
     private func temporaryRecordingURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("caf")
+            .appendingPathExtension("m4a")
+    }
+
+    // Returns a normalised RMS level (0–1) scaled for microphone sensitivity.
+    private static func rmsLevel(_ buffer: AVAudioPCMBuffer) -> Float {
+        guard let data = buffer.floatChannelData else { return 0 }
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return 0 }
+        let samples = UnsafeBufferPointer(start: data[0], count: frameCount)
+        let sumOfSquares = samples.reduce(0) { $0 + $1 * $1 }
+        let rms = sqrt(sumOfSquares / Float(frameCount))
+        return min(1.0, rms * 12)  // ×12 maps typical speech (≈0.05–0.08 raw) to 0.6–1.0
     }
 }
 
@@ -1682,15 +2431,18 @@ private final class PresenceV2ConversationMonitor: ObservableObject {
     private(set) var startedAt: Date?
 
     private var timer: Timer?
-    private let scriptedPulse: [Double] = [0.84, 0.72, 0.55, 0.38, 0.62, 0.8]
-    private var pulseIndex = 0
     private let capture = PresenceSpeechCaptureManager()
+
+    // Silence detection
+    private var silenceSeconds = 0
+    private var lastTranscriptLength = 0
 
     func start() {
         stop()
         elapsedSeconds = 0
-        conversationPulse = scriptedPulse.first ?? 0.78
-        pulseIndex = 0
+        conversationPulse = 0.78
+        silenceSeconds = 0
+        lastTranscriptLength = 0
         transcript = ""
         permissionMessage = nil
         startedAt = Date()
@@ -1710,10 +2462,24 @@ private final class PresenceV2ConversationMonitor: ObservableObject {
                 self.elapsedSeconds += 1
                 self.transcript = self.capture.transcript
                 self.permissionMessage = self.capture.permissionMessage
-                if self.elapsedSeconds.isMultiple(of: 3) {
-                    self.pulseIndex = (self.pulseIndex + 1) % self.scriptedPulse.count
-                    self.conversationPulse = self.scriptedPulse[self.pulseIndex]
+
+                // Silence tracking: if transcript isn't growing and level is low
+                let currentLen = self.capture.transcript.count
+                let level = self.capture.audioLevel
+                if currentLen == self.lastTranscriptLength && level < 0.08 {
+                    self.silenceSeconds += 1
+                } else {
+                    self.silenceSeconds = 0
+                    self.lastTranscriptLength = currentLen
                 }
+
+                // Target pulse: audio level drives it, silence pulls it down
+                let levelPulse = min(1.0, Double(level) * 1.6 + 0.25)
+                let silencePenalty: Double = self.silenceSeconds > 5 ? -0.3 : 0
+                let target = max(0.15, min(1.0, levelPulse + silencePenalty))
+
+                // Exponential smoothing so colour transitions feel intentional
+                self.conversationPulse = self.conversationPulse * 0.82 + target * 0.18
             }
         }
     }
@@ -1756,5 +2522,564 @@ private struct PresenceV2StopButtonStyle: ButtonStyle {
             .foregroundStyle(Color.black.opacity(0.78))
             .scaleEffect(configuration.isPressed ? 0.99 : 1)
             .shadow(color: .black.opacity(0.12), radius: 16, x: 0, y: 10)
+    }
+}
+
+// MARK: - Solo (single-user) experience
+// Text-first, no recording, no partner required. See docs/v2-solo-experience.md.
+
+private enum PresenceSoloIdentity {
+    private static let key = "presence.solo.userID"
+    /// Anonymous, persisted per-device id — the seed of per-user relational memory.
+    static var userID: String {
+        if let existing = UserDefaults.standard.string(forKey: key) { return existing }
+        let new = UUID().uuidString
+        UserDefaults.standard.set(new, forKey: key)
+        return new
+    }
+}
+
+private enum PresenceSoloIntent: String, CaseIterable, Identifiable {
+    case decode, prep, reflect
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .decode: return "Decode"
+        case .prep: return "Prep"
+        case .reflect: return "Reflect"
+        }
+    }
+
+    var headline: String {
+        switch self {
+        case .decode: return "What did they mean?"
+        case .prep: return "Help me go in well."
+        case .reflect: return "Help me process this."
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .decode: return "Something they said landed wrong, or you're not sure how to respond."
+        case .prep: return "There's a conversation coming up and you want to start it gently."
+        case .reflect: return "Something just happened and you want to make sense of it."
+        }
+    }
+
+    var contextPrompt: String {
+        switch self {
+        case .decode: return "What was going on?"
+        case .prep: return "What do you want to talk about?"
+        case .reflect: return "What happened?"
+        }
+    }
+
+    var needsQuote: Bool { self == .decode }
+}
+
+private struct PresenceSoloRequestBody: Encodable {
+    let reflection_id: String
+    let user_id: String
+    let mode: String
+    let text: String
+    let quote: String?
+}
+
+private struct PresenceSoloSubmission {
+    let reflectionID: String
+    let userID: String
+    let mode: String
+    let text: String
+    let quote: String?
+}
+
+private struct PresenceSoloResponse: Decodable {
+    struct Summary: Decodable { let headline: String }
+    struct Translation: Decodable {
+        let whatTheyMayHaveMeant: String
+        let theirPossibleNeed: String
+        enum CodingKeys: String, CodingKey {
+            case whatTheyMayHaveMeant = "what_they_may_have_meant"
+            case theirPossibleNeed = "their_possible_need"
+        }
+    }
+
+    let reflectionID: String
+    let status: String
+    let mode: String
+    let summary: Summary
+    let translation: Translation
+    let yourPart: String
+    let suggestedNext: String
+    let reframe: String?
+    let confidence: String?
+    let model: String?
+    let note: String?
+
+    enum CodingKeys: String, CodingKey {
+        case reflectionID = "reflection_id"
+        case status, mode, summary, translation
+        case yourPart = "your_part"
+        case suggestedNext = "suggested_next"
+        case reframe, confidence, model, note
+    }
+
+    var isDemo: Bool { model == nil || model == "demo" || note != nil }
+
+    init(reflectionID: String, status: String, mode: String, summary: Summary,
+         translation: Translation, yourPart: String, suggestedNext: String,
+         reframe: String?, confidence: String?, model: String?, note: String?) {
+        self.reflectionID = reflectionID
+        self.status = status
+        self.mode = mode
+        self.summary = summary
+        self.translation = translation
+        self.yourPart = yourPart
+        self.suggestedNext = suggestedNext
+        self.reframe = reframe
+        self.confidence = confidence
+        self.model = model
+        self.note = note
+    }
+
+    /// On-device fallback when the server isn't reachable — clearly labeled as demo.
+    static func mock(reflectionID: String, mode: String) -> PresenceSoloResponse {
+        PresenceSoloResponse(
+            reflectionID: reflectionID,
+            status: "completed",
+            mode: mode,
+            summary: Summary(headline: "Underneath the sharp words may be a bid for reassurance."),
+            translation: Translation(
+                whatTheyMayHaveMeant: "It may have been less about the plan and more about feeling like they were carrying it alone.",
+                theirPossibleNeed: "To feel that you're on the same side."
+            ),
+            yourPart: "It's worth noticing whether you moved to fix the logistics before the feeling had landed.",
+            suggestedNext: "Try: \"It sounds like you felt alone in this — did I get that right?\" before anything about the plan.",
+            reframe: "This reads less like criticism of you and more like a reach for partnership.",
+            confidence: "low",
+            model: "demo",
+            note: "On-device demo — the server wasn't reachable, so this isn't from your input."
+        )
+    }
+}
+
+private struct PresenceSoloInputView: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @StateObject private var capture = PresenceSpeechCaptureManager()
+    @State private var intent: PresenceSoloIntent = .decode
+    @State private var quote = ""
+    @State private var context = ""
+    @State private var isDictating = false
+    @State private var showProcessing = false
+    @FocusState private var focused: Field?
+
+    private enum Field { case quote, context }
+
+    private var theme: PresenceTheme { themeStore.current }
+
+    private var canSubmit: Bool {
+        let hasContext = !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasQuote = !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return intent.needsQuote ? (hasQuote || hasContext) : hasContext
+    }
+
+    private var submission: PresenceSoloSubmission {
+        PresenceSoloSubmission(
+            reflectionID: UUID().uuidString,
+            userID: PresenceSoloIdentity.userID,
+            mode: intent.rawValue,
+            text: context.trimmingCharacters(in: .whitespacesAndNewlines),
+            quote: intent.needsQuote ? quote.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                header
+                intentPicker
+                if intent.needsQuote { quoteField }
+                contextField
+                privacyNote
+                if let permissionMessage = capture.permissionMessage {
+                    Text(permissionMessage)
+                        .font(.system(.footnote, design: theme.bodyDesign))
+                        .foregroundStyle(theme.accentWarm)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                startButton
+            }
+            .padding(20)
+        }
+        .background(InsightBackdrop(theme: theme).ignoresSafeArea())
+        .navigationTitle("Just you")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .navigationDestination(isPresented: $showProcessing) {
+            PresenceSoloProcessingView(submission: submission)
+        }
+        .onChange(of: capture.transcript) { newValue in
+            // Mirror on-device dictation into the context field; audio never leaves the phone.
+            if isDictating { context = newValue }
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(intent.headline)
+                .font(.system(size: 30, weight: .bold, design: theme.displayDesign))
+                .foregroundStyle(theme.primaryText)
+            Text(intent.detail)
+                .font(.system(.subheadline, design: theme.bodyDesign))
+                .foregroundStyle(theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var intentPicker: some View {
+        HStack(spacing: 10) {
+            ForEach(PresenceSoloIntent.allCases) { option in
+                let selected = option == intent
+                Button {
+                    intent = option
+                } label: {
+                    Text(option.label)
+                        .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(
+                            (selected ? theme.accentSuccess.opacity(0.16) : Color.white.opacity(0.6)),
+                            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke((selected ? theme.accentSuccess : theme.border).opacity(selected ? 0.5 : 0.7), lineWidth: 1)
+                        )
+                        .foregroundStyle(selected ? theme.accentStrong : theme.secondaryText)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var quoteField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            fieldLabel("What they said")
+            TextField("\"Fine, do whatever you want.\"", text: $quote, axis: .vertical)
+                .font(.system(.body, design: theme.bodyDesign))
+                .focused($focused, equals: .quote)
+                .padding(12)
+                .background(Color.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .foregroundStyle(theme.primaryText)
+        }
+    }
+
+    private var contextField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                fieldLabel(intent.contextPrompt)
+                Spacer()
+                Button {
+                    toggleDictation()
+                } label: {
+                    Image(systemName: isDictating ? "waveform.circle.fill" : "mic.circle.fill")
+                        .font(.system(size: 26, weight: .medium))
+                        .foregroundStyle(isDictating ? theme.accentWarm : theme.accentSuccess)
+                }
+                .buttonStyle(.plain)
+            }
+            TextField("Type or tap the mic to speak…", text: $context, axis: .vertical)
+                .font(.system(.body, design: theme.bodyDesign))
+                .focused($focused, equals: .context)
+                .frame(minHeight: 90, alignment: .topLeading)
+                .padding(12)
+                .background(Color.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .foregroundStyle(theme.primaryText)
+            if isDictating {
+                Text("Listening… tap the mic again when you're done.")
+                    .font(.system(.footnote, design: theme.bodyDesign))
+                    .foregroundStyle(theme.secondaryText)
+            }
+        }
+    }
+
+    private var privacyNote: some View {
+        Label("Private — analyzed as text. No audio leaves your phone.", systemImage: "lock.fill")
+            .font(.system(.footnote, design: theme.bodyDesign))
+            .foregroundStyle(theme.secondaryText)
+    }
+
+    private var startButton: some View {
+        Button {
+            if isDictating { toggleDictation() }
+            showProcessing = true
+        } label: {
+            Text("Reflect")
+                .font(.system(.headline, design: theme.bodyDesign))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+        }
+        .buttonStyle(PresenceV2PrimaryButtonStyle(theme: theme))
+        .disabled(!canSubmit)
+        .opacity(canSubmit ? 1 : 0.55)
+    }
+
+    private func fieldLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(.caption, design: theme.bodyDesign).weight(.bold))
+            .foregroundStyle(theme.accentSuccess)
+            .textCase(.uppercase)
+            .tracking(0.7)
+    }
+
+    private func toggleDictation() {
+        if isDictating {
+            capture.stop()
+            isDictating = false
+        } else {
+            focused = nil
+            isDictating = true
+            Task {
+                let ok = await capture.start()
+                if !ok { isDictating = false }
+            }
+        }
+    }
+}
+
+private struct PresenceSoloProcessingView: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    let submission: PresenceSoloSubmission
+    @State private var reflection: PresenceSoloResponse?
+    @State private var showResult = false
+    @State private var errorMessage: String?
+
+    private var theme: PresenceTheme { themeStore.current }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(theme.accentSuccess)
+                .scaleEffect(1.25)
+            Text("Thinking it through")
+                .font(.system(size: 28, weight: .bold, design: theme.displayDesign))
+                .foregroundStyle(theme.primaryText)
+            Text("Reading what you wrote and looking for what may be underneath it.")
+                .font(.system(.subheadline, design: theme.bodyDesign))
+                .foregroundStyle(theme.secondaryText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.system(.footnote, design: theme.bodyDesign))
+                    .foregroundStyle(theme.accentWarm)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+            }
+            Spacer()
+        }
+        .background(InsightBackdrop(theme: theme).ignoresSafeArea())
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .navigationDestination(isPresented: $showResult) {
+            if let reflection {
+                PresenceSoloResultView(reflection: reflection)
+            }
+        }
+        .task {
+            guard !showResult else { return }
+            let result = await PresenceV2BackendClient.shared.reflect(submission: submission)
+            switch result {
+            case .success(let value):
+                reflection = value
+            case .failure(let error):
+                errorMessage = PresenceV2BackendClient.userMessage(for: error)
+                reflection = PresenceSoloResponse.mock(reflectionID: submission.reflectionID, mode: submission.mode)
+            }
+            try? await Task.sleep(for: .seconds(0.6))
+            showResult = true
+        }
+    }
+}
+
+private struct PresenceSoloResultView: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    let reflection: PresenceSoloResponse
+    @State private var feedbackOutcome: String?
+
+    private var theme: PresenceTheme { themeStore.current }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("A way to see it")
+                        .font(.system(.caption, design: theme.bodyDesign).weight(.bold))
+                        .foregroundStyle(theme.accentSuccess)
+                        .textCase(.uppercase)
+                        .tracking(0.7)
+                    Text(reflection.summary.headline)
+                        .font(.system(size: 28, weight: .bold, design: theme.displayDesign))
+                        .foregroundStyle(theme.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                sourceBanner
+                translationCard
+                if !reflection.yourPart.isEmpty { yourPartCard }
+                suggestedNextCard
+                if let reframe = reflection.reframe, !reframe.isEmpty { reframeCard(reframe) }
+                usefulnessSection
+            }
+            .padding(20)
+        }
+        .background(InsightBackdrop(theme: theme).ignoresSafeArea())
+        .navigationTitle("Reflection")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+    }
+
+    private var sourceBanner: some View {
+        let demo = reflection.isDemo
+        let accent = demo ? theme.accentWarm : theme.accentSuccess
+        let icon = demo ? "exclamationmark.triangle.fill" : "checkmark.seal.fill"
+        let title = demo ? "Demo reflection" : "Reflection by " + (reflection.model ?? "your local model")
+        let detail = demo
+            ? (reflection.note ?? "Showing local demo data, not your input.")
+            : "Generated from your text. Nothing was recorded."
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(accent)
+                Text(title)
+                    .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                    .foregroundStyle(theme.primaryText)
+            }
+            Text(detail)
+                .font(.system(.footnote, design: theme.bodyDesign))
+                .foregroundStyle(theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(accent.opacity(0.22), lineWidth: 1))
+    }
+
+    private var translationCard: some View {
+        soloCard {
+            cardTitle("What they may have meant")
+            cardBody(reflection.translation.whatTheyMayHaveMeant)
+            Divider().overlay(theme.border.opacity(0.5)).padding(.vertical, 2)
+            cardEyebrow("What they might need")
+            cardBody(reflection.translation.theirPossibleNeed)
+        }
+    }
+
+    private var yourPartCard: some View {
+        soloCard {
+            cardTitle("A gentle thing to notice")
+            cardBody(reflection.yourPart)
+        }
+    }
+
+    private var suggestedNextCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            cardEyebrow("Something to try")
+            Text(reflection.suggestedNext)
+                .font(.system(.body, design: theme.bodyDesign).weight(.medium))
+                .foregroundStyle(theme.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(theme.accentSuccess.opacity(0.1), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.accentSuccess.opacity(0.28), lineWidth: 1))
+    }
+
+    private func reframeCard(_ text: String) -> some View {
+        soloCard {
+            cardTitle("Another angle")
+            cardBody(text)
+        }
+    }
+
+    private var usefulnessSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            cardTitle("Did this help?")
+            if let outcome = feedbackOutcome {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(theme.accentSuccess)
+                    Text(outcome == "yes" ? "Glad it helped." : outcome == "somewhat" ? "Thanks — we'll keep improving." : "Noted. That matters.")
+                        .font(.system(.subheadline, design: theme.bodyDesign))
+                        .foregroundStyle(theme.secondaryText)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    feedbackButton(label: "Yes", outcome: "yes", color: theme.accentSuccess)
+                    feedbackButton(label: "Somewhat", outcome: "somewhat", color: theme.accentStrong)
+                    feedbackButton(label: "Not really", outcome: "no", color: theme.accentWarm)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.border.opacity(0.84), lineWidth: 1))
+    }
+
+    private func feedbackButton(label: String, outcome: String, color: Color) -> some View {
+        Button {
+            feedbackOutcome = outcome
+            Task {
+                await PresenceV2BackendClient.shared.submitFeedback(
+                    sessionID: reflection.reflectionID,
+                    outcome: outcome,
+                    model: reflection.model,
+                    confidence: reflection.confidence
+                )
+            }
+        } label: {
+            Text(label)
+                .font(.system(.subheadline, design: theme.bodyDesign).weight(.semibold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(color.opacity(0.3), lineWidth: 1))
+                .foregroundStyle(color)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func soloCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) { content() }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.border.opacity(0.84), lineWidth: 1))
+    }
+
+    private func cardTitle(_ text: String) -> some View {
+        Text(text).font(.system(.headline, design: theme.bodyDesign)).foregroundStyle(theme.primaryText)
+    }
+    private func cardEyebrow(_ text: String) -> some View {
+        Text(text)
+            .font(.system(.caption, design: theme.bodyDesign).weight(.bold))
+            .foregroundStyle(theme.accentSuccess)
+            .textCase(.uppercase)
+            .tracking(0.7)
+    }
+    private func cardBody(_ text: String) -> some View {
+        Text(text)
+            .font(.system(.subheadline, design: theme.bodyDesign))
+            .foregroundStyle(theme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
